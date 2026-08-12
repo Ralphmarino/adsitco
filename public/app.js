@@ -351,7 +351,9 @@ function render() {
   const gscNow = gscTotals(gsc.current);
   const gscBefore = gscTotals(gsc.previous);
 
-  document.getElementById("site-label").textContent = `${snapshot.siteLabel} — search & analytics`;
+  // The logo beside this already says who the report is for, so the heading
+  // names the report rather than repeating the brand.
+  document.getElementById("site-label").textContent = "Search & analytics report";
   document.getElementById("range-meta").textContent =
     `Last ${state.days} days · analytics ${rangeLabel(ga4.range)} · search ${rangeLabel(gsc.range)}`;
   document.getElementById("ga4-range").textContent = rangeLabel(ga4.range);

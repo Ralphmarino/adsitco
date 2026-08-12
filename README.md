@@ -191,6 +191,43 @@ weighted by impressions — so a 90-day figure is not a misleading average of
 
 ---
 
+## Branding
+
+The report carries adsitco's chrome: the thin orange rule over a charcoal
+masthead, the logo, and the orange keyline on section headings — the same
+structure as adsitco.com. The masthead stays charcoal in both themes, because
+the supplied logo is a white mark and needs a dark ground either way.
+
+| Token | Value | Where it came from |
+| --- | --- | --- |
+| `--brand-orange` | `#ff5a3b` | Sampled from the dot in the logo file |
+| `--brand-orange-deep` | `#d9411f` | Darker step for button fills — carries white text at 4.44:1 |
+| `--brand-green` | `#76b82a` | The site's CTA green |
+| `--brand-charcoal` | `#3a423f` | Masthead — white text at 10.34:1 |
+
+### Why the charts are not orange-and-green
+
+The obvious move is to plot series in the site's two accents. **Orange `#ff5a3b`
+against green `#76b82a` measures a deuteranopia ΔE of 1.5** — to a red-green
+colourblind reader, roughly 1 in 12 men, they are the same colour. Any two-series
+chart drawn in them is unreadable.
+
+So the brand orange leads as series 1, and series 2 is blue rather than the brand
+green. That keeps adsitco's primary colour on the most important line while
+staying legible to everyone. The green survives as an accent — positive deltas
+use a brand-tinted green (`#4a7318`, 5.45:1 as text) rather than the CTA green,
+which is far too light to read as text.
+
+Dark mode uses `#f0603c` for series 1: the brand orange is too light for the dark
+lightness band, so it is stepped down rather than reused unchanged.
+
+Every palette here was checked with the validator in the `dataviz` skill rather
+than judged by eye. If you change a colour, re-run it:
+
+```
+node scripts/validate_palette.js "#ff5a3b,#2a78d6,#1baf7a" --mode light
+```
+
 ## Layout
 
 ```
