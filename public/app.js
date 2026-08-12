@@ -5,6 +5,7 @@ const PASSWORD_KEY = "adsitco-report-password";
 
 const state = {
   days: 28,
+  demo: new URLSearchParams(location.search).get("demo") === "1",
   filters: { device: "", channel: "" },
   // Captured from the first unfiltered load so the dropdown still lists every
   // channel after one of them narrows the response.
@@ -219,7 +220,49 @@ function reportUrl(days = state.days, filters = state.filters) {
   return `/api/report?${params}`;
 }
 
+/**
+ * Demo mode. The sample file ships with fixed dates, so they are re-anchored to
+ * today on load — otherwise the report would drift into showing a stale window
+ * as time passes.
+ *
+ * Reached only by an explicit ?demo=1 (or the button on the error screen). A
+ * failed live load never silently falls back to it: swapping invented numbers in
+ * mid-presentation, under the same headings, is the one failure mode worse than
+ * an error message.
+ */
+async function loadSampleSnapshot() {
+  const res = await fetch("/sample-data.json");
+  if (!res.ok) throw new Error("Sample data is unavailable.");
+  const snapshot = await res.json();
+
+  const reanchor = (rows, lagDays) => {
+    if (!rows.length) return rows;
+    const target = new Date();
+    target.setUTCDate(target.getUTCDate() - lagDays);
+    const shift =
+      Math.round(
+        (target - new Date(`${rows[rows.length - 1].date}T00:00:00Z`)) / 86_400_000,
+      ) || 0;
+    return rows.map((row) => ({ ...row, date: shiftISO(row.date, shift) }));
+  };
+
+  snapshot.ga4.daily = reanchor(snapshot.ga4.daily, 1);
+  snapshot.gsc.daily = reanchor(snapshot.gsc.daily, 3);
+  snapshot.generatedAt = new Date().toISOString();
+
+  const lastGa4 = snapshot.ga4.daily.at(-1)?.date;
+  const lastGsc = snapshot.gsc.daily.at(-1)?.date;
+  snapshot.window = {
+    days: state.days,
+    ga4: { start: shiftISO(lastGa4, -(state.days - 1)), end: lastGa4 },
+    gsc: { start: shiftISO(lastGsc, -(state.days - 1)), end: lastGsc },
+  };
+  return snapshot;
+}
+
 async function loadSnapshot(days) {
+  if (state.demo) return loadSampleSnapshot();
+
   const headers = {};
   if (state.password) headers["x-report-password"] = state.password;
 
@@ -265,6 +308,20 @@ function syncFilterUI(snapshot) {
   document.getElementById("filter-clear").hidden = noFilters;
 
   const status = document.getElementById("filter-status");
+
+  // Filters are executed by Google's APIs, which demo mode never reaches. Rather
+  // than let a selection appear to work and change nothing, the controls are
+  // disabled and say why.
+  if (state.demo) {
+    select.disabled = true;
+    document.getElementById("filter-device").disabled = true;
+    document.getElementById("filter-clear").hidden = true;
+    status.textContent = "Filters need live data — they are disabled in sample mode.";
+    return;
+  }
+  select.disabled = false;
+  document.getElementById("filter-device").disabled = false;
+
   if (noFilters) {
     status.textContent = "";
     return;
@@ -676,11 +733,23 @@ function showGate(message) {
   document.getElementById("gate-input").focus();
 }
 
+function offerSampleMode(message) {
+  const notice = document.getElementById("notice");
+  notice.hidden = false;
+  notice.replaceChildren(document.createTextNode(`${message} `));
+  const link = document.createElement("a");
+  link.href = "?demo=1";
+  link.textContent = "Preview the layout with sample data";
+  link.className = "footer__link";
+  notice.appendChild(link);
+}
+
 async function refresh() {
   try {
     state.snapshot = await loadSnapshot(state.days);
     document.getElementById("gate").hidden = true;
     document.getElementById("app").hidden = false;
+    document.getElementById("sample-banner").hidden = !state.snapshot.sample;
     render();
   } catch (err) {
     if (err.code === 401) {
@@ -690,7 +759,7 @@ async function refresh() {
       return;
     }
     document.getElementById("app").hidden = false;
-    setNotice(`Could not load the report: ${err.message}`);
+    offerSampleMode(`Could not load live data: ${err.message}.`);
   }
 }
 

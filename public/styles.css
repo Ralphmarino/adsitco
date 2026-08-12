@@ -223,6 +223,36 @@ body {
   color: var(--text-muted);
 }
 
+/* Sample-data banner ------------------------------------------------------ */
+
+.samplebar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 10px clamp(16px, 4vw, 40px);
+  background: #fab219;
+  color: #0b0b0b;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.samplebar__tag {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11.5px;
+  font-weight: 700;
+  border: 1.5px solid #0b0b0b;
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+.samplebar__link {
+  color: #0b0b0b;
+  margin-left: auto;
+  font-weight: 600;
+}
+
 /* Filter bar ------------------------------------------------------------- */
 
 .filterbar {
