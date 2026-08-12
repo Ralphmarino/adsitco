@@ -191,6 +191,34 @@ weighted by impressions — so a 90-day figure is not a misleading average of
 
 ---
 
+## Demo mode
+
+`/?demo=1` renders the report from `public/sample-data.json` so the layout can be
+reviewed before the Google credentials are in place. A loud banner marks it, and
+the filter controls are disabled because filters execute server-side.
+
+**A live-data failure never falls back to this.** It shows the error and an
+explicit link instead — modelled numbers must never appear under the same
+headings mid-presentation.
+
+Provenance, split precisely:
+
+| Real | Modelled |
+| --- | --- |
+| Query strings, their ranking positions and search volumes | Impressions, clicks, CTR |
+| Page URLs and their relative traffic weights | Sessions, users, page views, engagement |
+| — | Revenue, orders, channel mix, geography, device split |
+
+The real half comes from **Ahrefs Site Explorer** for adsitco.com (1,088 organic
+keywords, ~4,249 monthly organic visits). Impressions are derived from search
+volume, clicks from a position-based click-through curve, and sessions are
+anchored so organic lands near the Ahrefs estimate — which keeps the panels
+reconciling with each other instead of contradicting themselves.
+
+Nothing in it comes from Google Analytics or Search Console. Those require the
+service account; once it is configured the report reads them live and this file
+is no longer used. Regenerate with `node scripts/make-sample-data.mjs`.
+
 ## Branding
 
 The report carries adsitco's chrome: the thin orange rule over a charcoal
