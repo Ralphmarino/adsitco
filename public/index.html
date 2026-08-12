@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en" data-theme="">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Search &amp; analytics report</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232a78d6'/%3E%3Cpath d='M3 11.5 6.5 7l2.5 2.5L13 4.5' stroke='white' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body>
+    <!-- Password gate. Shown only when /api/report answers 401. -->
+    <div id="gate" class="gate" hidden>
+      <form class="gate__card" id="gate-form">
+        <h1 class="gate__title">Report access</h1>
+        <p class="gate__hint">This report contains private analytics for the site.</p>
+        <label class="gate__label" for="gate-input">Password</label>
+        <input
+          class="gate__input"
+          id="gate-input"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+        <p class="gate__error" id="gate-error" role="alert" hidden></p>
+        <button class="btn btn--primary" type="submit">View report</button>
+      </form>
+    </div>
+
+    <div id="app">
+      <header class="topbar">
+        <div class="topbar__identity">
+          <h1 class="topbar__title" id="site-label">Search &amp; analytics report</h1>
+          <p class="topbar__meta" id="range-meta">Loading…</p>
+        </div>
+
+        <div class="topbar__controls">
+          <div class="segmented" role="group" aria-label="Date range">
+            <button class="segmented__btn" data-days="7" type="button">7d</button>
+            <button class="segmented__btn is-active" data-days="28" type="button">28d</button>
+            <button class="segmented__btn" data-days="90" type="button">90d</button>
+          </div>
+          <button class="btn" id="theme-toggle" type="button" aria-label="Toggle colour theme">
+            Theme
+          </button>
+        </div>
+      </header>
+
+      <p class="notice" id="notice" role="status" hidden></p>
+
+      <main class="page">
+        <!-- Headline ------------------------------------------------------ -->
+        <section class="panel panel--hero" aria-labelledby="hero-heading">
+          <h2 class="panel__title" id="hero-heading">Sessions</h2>
+          <p class="hero__value" id="hero-value">—</p>
+          <p class="hero__delta" id="hero-delta"></p>
+          <p class="hero__sub" id="hero-sub"></p>
+        </section>
+
+        <!-- Analytics tiles ----------------------------------------------- -->
+        <section aria-labelledby="ga4-tiles-heading">
+          <h2 class="section__title" id="ga4-tiles-heading">
+            Google Analytics <span class="section__range" id="ga4-range"></span>
+          </h2>
+          <div class="tiles" id="ga4-tiles"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="traffic-chart-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="traffic-chart-heading">Sessions and users over time</h2>
+              <p class="panel__sub">Daily totals across the selected range.</p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="traffic-chart">
+              Table
+            </button>
+          </div>
+          <div class="chart" id="traffic-chart"></div>
+          <div class="table-view" id="traffic-chart-table" hidden></div>
+        </section>
+
+        <section class="panel" aria-labelledby="channels-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="channels-heading">Sessions by channel</h2>
+              <p class="panel__sub" id="channels-sub"></p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="channels-chart">
+              Table
+            </button>
+          </div>
+          <div class="chart" id="channels-chart"></div>
+          <div class="table-view" id="channels-chart-table" hidden></div>
+        </section>
+
+        <!-- Search Console tiles ------------------------------------------ -->
+        <section aria-labelledby="gsc-tiles-heading">
+          <h2 class="section__title" id="gsc-tiles-heading">
+            Google Search <span class="section__range" id="gsc-range"></span>
+          </h2>
+          <div class="tiles" id="gsc-tiles"></div>
+        </section>
+
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="clicks-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="clicks-heading">Search clicks</h2>
+                <p class="panel__sub">Daily clicks from Google results.</p>
+              </div>
+              <button class="btn btn--ghost" type="button" data-table-toggle="clicks-chart">
+                Table
+              </button>
+            </div>
+            <div class="chart" id="clicks-chart"></div>
+            <div class="table-view" id="clicks-chart-table" hidden></div>
+          </section>
+
+          <section class="panel" aria-labelledby="impressions-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="impressions-heading">Search impressions</h2>
+                <p class="panel__sub">Plotted separately — clicks and impressions differ by orders of magnitude.</p>
+              </div>
+              <button class="btn btn--ghost" type="button" data-table-toggle="impressions-chart">
+                Table
+              </button>
+            </div>
+            <div class="chart" id="impressions-chart"></div>
+            <div class="table-view" id="impressions-chart-table" hidden></div>
+          </section>
+        </div>
+
+        <section class="panel" aria-labelledby="position-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="position-heading">Average position</h2>
+              <p class="panel__sub">Lower is better — the axis is inverted so up means improving.</p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="position-chart">
+              Table
+            </button>
+          </div>
+          <div class="chart" id="position-chart"></div>
+          <div class="table-view" id="position-chart-table" hidden></div>
+        </section>
+
+        <!-- Tables --------------------------------------------------------- -->
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="queries-heading">
+            <h2 class="panel__title" id="queries-heading">Top search queries</h2>
+            <p class="panel__sub" id="queries-sub"></p>
+            <div class="table-view" id="queries-table"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="landing-heading">
+            <h2 class="panel__title" id="landing-heading">Top landing pages in search</h2>
+            <p class="panel__sub" id="landing-sub"></p>
+            <div class="table-view" id="landing-table"></div>
+          </section>
+        </div>
+
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="pages-heading">
+            <h2 class="panel__title" id="pages-heading">Most viewed pages</h2>
+            <p class="panel__sub" id="pages-sub"></p>
+            <div class="table-view" id="pages-table"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="sources-heading">
+            <h2 class="panel__title" id="sources-heading">Top sources</h2>
+            <p class="panel__sub" id="sources-sub"></p>
+            <div class="table-view" id="sources-table"></div>
+          </section>
+        </div>
+
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="countries-heading">
+            <h2 class="panel__title" id="countries-heading">Countries</h2>
+            <p class="panel__sub" id="countries-sub"></p>
+            <div class="table-view" id="countries-table"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="devices-heading">
+            <h2 class="panel__title" id="devices-heading">Devices</h2>
+            <p class="panel__sub" id="devices-sub"></p>
+            <div class="table-view" id="devices-table"></div>
+          </section>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <span id="generated-at"></span>
+        <a class="footer__link" href="/api/report?days=28" id="raw-link">Raw JSON</a>
+      </footer>
+    </div>
+
+    <div class="tooltip" id="tooltip" hidden></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

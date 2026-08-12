@@ -1,0 +1,17 @@
+{
+  "name": "adsitco-report",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GA4 + Google Search Console report for adsitco.com, hosted on Netlify.",
+  "scripts": {
+    "dev": "netlify dev",
+    "refresh": "netlify functions:invoke refresh"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
