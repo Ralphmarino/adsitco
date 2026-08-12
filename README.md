@@ -147,8 +147,27 @@ process memory — it works, it just resets when you restart.
 page views, engagement rate, engaged time per user, key events. Sessions and
 users over time; sessions by channel; top pages, sources, countries, devices.
 
+**Revenue** — revenue, orders, average order value and revenue per session, plus
+revenue over time and a revenue column on the channel, source and page tables.
+These use GA4's `totalRevenue`, which covers purchase, subscription and ad
+revenue, so it reports sales on an ecommerce property without going blank on one
+that books money another way. Set `REPORT_CURRENCY` to match the property.
+**The revenue panels hide themselves** when the property reports no revenue —
+a row of `$0` tiles in a client presentation reads as a broken report.
+
 **Search Console** — clicks, impressions, average CTR, average position. Each
 plotted over time, plus top queries and top landing pages.
+
+**Filters** — device and channel, applied by Google's APIs rather than after the
+fact, so a filtered view recomputes every number: totals, trends and tables
+alike. Each filter combination is cached separately, so the second visit to a
+given view is instant. The query and landing-page tables also have a text search
+that filters the loaded rows with no round trip.
+
+One honest limitation, stated in the UI rather than hidden: **Search Console has
+no channel dimension**, so a channel selection narrows the Analytics panels only.
+When one is active, the filter bar says the search panels ignore it. Device
+filtering applies to both sources.
 
 Every stat compares against the immediately preceding period of the same length.
 Every chart has a **Table** toggle, and the page follows your system light/dark

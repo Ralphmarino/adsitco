@@ -27,13 +27,29 @@ function shapeRow(row, dimensionNames) {
   return out;
 }
 
-async function byDimension({ startDate, endDate, dimensions, rowLimit, type }) {
+/**
+ * Search Console's own filter syntax. Only device carries over from the report's
+ * filter bar — Search Console has no notion of a GA4 channel group, so a channel
+ * selection deliberately does not reach here, and the UI says so rather than
+ * silently returning unfiltered search numbers under a filtered heading.
+ */
+function filterGroups(filters = {}) {
+  const list = [];
+  if (filters.device) {
+    list.push({ dimension: "device", operator: "equals", expression: filters.device.toUpperCase() });
+  }
+  if (!list.length) return undefined;
+  return [{ filters: list }];
+}
+
+async function byDimension({ startDate, endDate, dimensions, rowLimit, filters }) {
+  const groups = filterGroups(filters);
   const rows = await query({
     startDate,
     endDate,
     dimensions,
     rowLimit,
-    ...(type ? { type } : {}),
+    ...(groups ? { dimensionFilterGroups: groups } : {}),
   });
   return rows.map((row) => shapeRow(row, dimensions));
 }
@@ -45,12 +61,13 @@ async function byDimension({ startDate, endDate, dimensions, rowLimit, type }) {
  * already impression-weighted, so re-weighting daily positions by daily
  * impressions reproduces the true average for any window.
  */
-export async function fetchGscDaily({ startDate, endDate }) {
+export async function fetchGscDaily({ startDate, endDate, filters }) {
   const rows = await byDimension({
     startDate,
     endDate,
     dimensions: ["date"],
     rowLimit: 1000,
+    filters,
   });
   return rows
     .map((row) => ({
@@ -63,12 +80,13 @@ export async function fetchGscDaily({ startDate, endDate }) {
 }
 
 /** Dimension tables for one window. */
-export async function collectGscBreakdowns({ start, end }) {
+export async function collectGscBreakdowns({ start, end, filters }) {
+  const base = { startDate: start, endDate: end, filters };
   const [queries, pages, countries, devices] = await Promise.all([
-    byDimension({ startDate: start, endDate: end, dimensions: ["query"], rowLimit: 100 }),
-    byDimension({ startDate: start, endDate: end, dimensions: ["page"], rowLimit: 50 }),
-    byDimension({ startDate: start, endDate: end, dimensions: ["country"], rowLimit: 15 }),
-    byDimension({ startDate: start, endDate: end, dimensions: ["device"], rowLimit: 5 }),
+    byDimension({ ...base, dimensions: ["query"], rowLimit: 100 }),
+    byDimension({ ...base, dimensions: ["page"], rowLimit: 50 }),
+    byDimension({ ...base, dimensions: ["country"], rowLimit: 15 }),
+    byDimension({ ...base, dimensions: ["device"], rowLimit: 5 }),
   ]);
 
   const clean = (rows, key) =>

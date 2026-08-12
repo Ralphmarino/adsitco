@@ -1,5 +1,10 @@
 import { checkViewerAuth, checkRefreshAuth, json } from "../lib/auth.mjs";
-import { collectSnapshot, normaliseWindow } from "../lib/collect.mjs";
+import {
+  collectSnapshot,
+  normaliseWindow,
+  normaliseFilters,
+  filterSignature,
+} from "../lib/collect.mjs";
 import { readSnapshot, writeSnapshot, ageInMinutes } from "../lib/store.mjs";
 
 // The scheduled job refreshes daily. If it has not run — a paused site, a
@@ -15,6 +20,11 @@ export default async (req) => {
 
   const url = new URL(req.url);
   const days = normaliseWindow(url.searchParams.get("days") ?? 28);
+  const filters = normaliseFilters({
+    device: url.searchParams.get("device"),
+    channel: url.searchParams.get("channel"),
+  });
+  const signature = filterSignature(filters);
   const forceRequested = url.searchParams.get("force") === "1";
   const force = forceRequested && checkRefreshAuth(req);
 
@@ -22,7 +32,7 @@ export default async (req) => {
     return json({ error: "forbidden", message: "Valid x-refresh-token required to force a refresh." }, 403);
   }
 
-  const cached = await readSnapshot(days);
+  const cached = await readSnapshot(days, signature);
   const stale = !cached || ageInMinutes(cached) > STALE_AFTER_MINUTES;
 
   if (!force && !stale) {
@@ -30,8 +40,8 @@ export default async (req) => {
   }
 
   try {
-    const snapshot = await collectSnapshot({ days });
-    await writeSnapshot(days, snapshot);
+    const snapshot = await collectSnapshot({ days, filters });
+    await writeSnapshot(days, snapshot, signature);
     return json({ ...snapshot, cache: force ? "forced" : "miss" });
   } catch (err) {
     if (cached) {

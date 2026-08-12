@@ -49,6 +49,28 @@
         </div>
       </header>
 
+      <div class="filterbar">
+        <label class="field">
+          <span class="field__label">Device</span>
+          <select class="field__control" id="filter-device">
+            <option value="">All devices</option>
+            <option value="desktop">Desktop</option>
+            <option value="mobile">Mobile</option>
+            <option value="tablet">Tablet</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span class="field__label">Channel</span>
+          <select class="field__control" id="filter-channel">
+            <option value="">All channels</option>
+          </select>
+        </label>
+
+        <button class="btn" id="filter-clear" type="button" hidden>Clear filters</button>
+        <span class="filterbar__status" id="filter-status"></span>
+      </div>
+
       <p class="notice" id="notice" role="status" hidden></p>
 
       <main class="page">
@@ -80,6 +102,20 @@
           </div>
           <div class="chart" id="traffic-chart"></div>
           <div class="table-view" id="traffic-chart-table" hidden></div>
+        </section>
+
+        <section class="panel" id="revenue-panel" aria-labelledby="revenue-heading" hidden>
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="revenue-heading">Revenue over time</h2>
+              <p class="panel__sub" id="revenue-sub">Daily revenue recorded in Analytics.</p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="revenue-chart">
+              Table
+            </button>
+          </div>
+          <div class="chart" id="revenue-chart"></div>
+          <div class="table-view" id="revenue-chart-table" hidden></div>
         </section>
 
         <section class="panel" aria-labelledby="channels-heading">
@@ -153,12 +189,26 @@
           <section class="panel" aria-labelledby="queries-heading">
             <h2 class="panel__title" id="queries-heading">Top search queries</h2>
             <p class="panel__sub" id="queries-sub"></p>
+            <input
+              class="field__control field__control--search"
+              id="queries-search"
+              type="search"
+              placeholder="Filter queries…"
+              aria-label="Filter queries"
+            />
             <div class="table-view" id="queries-table"></div>
           </section>
 
           <section class="panel" aria-labelledby="landing-heading">
             <h2 class="panel__title" id="landing-heading">Top landing pages in search</h2>
             <p class="panel__sub" id="landing-sub"></p>
+            <input
+              class="field__control field__control--search"
+              id="landing-search"
+              type="search"
+              placeholder="Filter pages…"
+              aria-label="Filter landing pages"
+            />
             <div class="table-view" id="landing-table"></div>
           </section>
         </div>

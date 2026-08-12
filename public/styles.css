@@ -223,6 +223,51 @@ body {
   color: var(--text-muted);
 }
 
+/* Filter bar ------------------------------------------------------------- */
+
+.filterbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  padding: 12px clamp(16px, 4vw, 40px);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+}
+
+.field {
+  display: grid;
+  gap: 3px;
+}
+
+.field__label {
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.field__control {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--page);
+  color: var(--text-primary);
+  min-width: 150px;
+}
+
+.field__control--search {
+  width: 100%;
+  min-width: 0;
+  margin-top: 10px;
+}
+
+.filterbar__status {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  padding-bottom: 6px;
+}
+
 .notice {
   margin: 0;
   padding: 10px clamp(16px, 4vw, 40px);

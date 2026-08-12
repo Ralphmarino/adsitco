@@ -15,8 +15,11 @@ export default async () => {
 
   for (const days of SUPPORTED_WINDOWS) {
     try {
+      // Only the unfiltered views are pre-warmed. Filtered combinations are
+      // collected on demand and cached from then on — pre-warming every
+      // combination would multiply the API calls for views nobody may open.
       const snapshot = await collectSnapshot({ days });
-      const persisted = await writeSnapshot(days, snapshot);
+      const persisted = await writeSnapshot(days, snapshot, "all");
       results.push({
         days,
         ok: true,

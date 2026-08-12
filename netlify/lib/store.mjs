@@ -15,10 +15,12 @@ function blobStore() {
   }
 }
 
-const keyFor = (days) => `snapshot-${days}d.json`;
+// The filter signature is part of the key: each filter combination is its own
+// cached snapshot, so switching filters never serves another view's numbers.
+const keyFor = (days, signature = "all") => `snapshot-${days}d-${signature}.json`;
 
-export async function readSnapshot(days) {
-  const key = keyFor(days);
+export async function readSnapshot(days, signature) {
+  const key = keyFor(days, signature);
   const store = blobStore();
   if (store) {
     try {
@@ -32,8 +34,8 @@ export async function readSnapshot(days) {
   return memory.get(key) ?? null;
 }
 
-export async function writeSnapshot(days, snapshot) {
-  const key = keyFor(days);
+export async function writeSnapshot(days, snapshot, signature) {
+  const key = keyFor(days, signature);
   memory.set(key, snapshot);
   const store = blobStore();
   if (!store) return false;

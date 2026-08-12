@@ -16,6 +16,31 @@ export function historyDays() {
   return Math.max(days, Math.max(...SUPPORTED_WINDOWS));
 }
 
+export const DEVICE_VALUES = ["desktop", "mobile", "tablet"];
+
+/**
+ * Filters are part of the cache identity, so they are normalised to a closed set
+ * of values before they reach either API or the blob key. An unrecognised value
+ * becomes "no filter" rather than being passed through.
+ */
+export function normaliseFilters(params) {
+  const device = String(params?.device || "").toLowerCase();
+  const channel = String(params?.channel || "").trim();
+  return {
+    device: DEVICE_VALUES.includes(device) ? device : "",
+    // Channel names come from GA4's own list, so the only guard needed is a
+    // length cap to keep the cache key bounded.
+    channel: channel.length > 0 && channel.length <= 60 ? channel : "",
+  };
+}
+
+export function filterSignature(filters) {
+  const parts = [];
+  if (filters.device) parts.push(`d:${filters.device}`);
+  if (filters.channel) parts.push(`c:${filters.channel.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+  return parts.length ? parts.join("_") : "all";
+}
+
 export function normaliseWindow(value) {
   const requested = Number(value);
   if (!Number.isFinite(requested)) return 28;
@@ -34,8 +59,9 @@ export function normaliseWindow(value) {
  * A failure in one source is recorded as a warning rather than aborting — a
  * report with half its panels beats a report that will not load.
  */
-export async function collectSnapshot({ days = 28 } = {}) {
+export async function collectSnapshot({ days = 28, filters = {} } = {}) {
   const history = historyDays();
+  const active = normaliseFilters(filters);
   const ga4Window = buildWindow(days, GA4_LAG_DAYS);
   const gscWindow = buildWindow(days, GSC_LAG_DAYS);
 
@@ -55,17 +81,27 @@ export async function collectSnapshot({ days = 28 } = {}) {
   };
 
   const [ga4Daily, ga4Breakdowns, gscDaily, gscBreakdowns] = await Promise.all([
-    guard("GA4 daily", () => fetchGa4Daily({ startDate: ga4HistoryStart, endDate: ga4Window.end }), []),
-    guard("GA4 breakdowns", () => collectGa4Breakdowns(ga4Window), {
+    guard(
+      "GA4 daily",
+      () => fetchGa4Daily({ startDate: ga4HistoryStart, endDate: ga4Window.end, filters: active }),
+      [],
+    ),
+    guard("GA4 breakdowns", () => collectGa4Breakdowns({ ...ga4Window, filters: active }), {
       channels: [],
       sources: [],
       countries: [],
       devices: [],
       pages: [],
+      channelOptions: [],
       keyEventMetric: null,
+      hasRevenue: false,
     }),
-    guard("Search Console daily", () => fetchGscDaily({ startDate: gscHistoryStart, endDate: gscWindow.end }), []),
-    guard("Search Console breakdowns", () => collectGscBreakdowns(gscWindow), {
+    guard(
+      "Search Console daily",
+      () => fetchGscDaily({ startDate: gscHistoryStart, endDate: gscWindow.end, filters: active }),
+      [],
+    ),
+    guard("Search Console breakdowns", () => collectGscBreakdowns({ ...gscWindow, filters: active }), {
       queries: [],
       pages: [],
       countries: [],
@@ -76,7 +112,13 @@ export async function collectSnapshot({ days = 28 } = {}) {
   return {
     generatedAt: new Date().toISOString(),
     siteLabel: process.env.SITE_LABEL || process.env.GSC_SITE_URL || "site",
+    currency: process.env.REPORT_CURRENCY || "USD",
     historyDays: history,
+    filters: active,
+    // Search Console has no channel dimension, so a channel selection narrows
+    // the analytics panels only. The report says so instead of implying the
+    // search numbers were filtered too.
+    filtersAppliedToSearch: { device: Boolean(active.device), channel: false },
     window: {
       days,
       ga4: { start: ga4Window.start, end: ga4Window.end },

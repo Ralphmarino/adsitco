@@ -5,6 +5,11 @@ const PASSWORD_KEY = "adsitco-report-password";
 
 const state = {
   days: 28,
+  filters: { device: "", channel: "" },
+  // Captured from the first unfiltered load so the dropdown still lists every
+  // channel after one of them narrows the response.
+  channelOptions: [],
+  search: { queries: "", landing: "" },
   snapshot: null,
   password: sessionStorage.getItem(PASSWORD_KEY) || "",
 };
@@ -32,6 +37,34 @@ const fmt = {
 
 function percent(value) {
   return Number.isFinite(value) ? `${(value * 100).toFixed(1)}%` : "—";
+}
+
+function currencyFormatters(code = "USD") {
+  const whole = new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: code,
+    maximumFractionDigits: 0,
+  });
+  const precise = new Intl.NumberFormat(undefined, {
+    style: "currency",
+    currency: code,
+    maximumFractionDigits: 2,
+  });
+  // Axis and end labels compact to K/M so neighbouring ticks cannot collide.
+  const symbol = whole.formatToParts(0).find((part) => part.type === "currency")?.value ?? "";
+  const short = (value) => {
+    if (!Number.isFinite(value)) return "—";
+    const abs = Math.abs(value);
+    const sign = value < 0 ? "-" : "";
+    if (abs >= 1_000_000) return `${sign}${symbol}${(abs / 1_000_000).toFixed(1)}M`;
+    if (abs >= 10_000) return `${sign}${symbol}${(abs / 1000).toFixed(1)}K`;
+    return whole.format(value);
+  };
+  return {
+    money: (v) => (Number.isFinite(v) ? whole.format(v) : "—"),
+    exact: (v) => (Number.isFinite(v) ? precise.format(v) : "—"),
+    chart: { compact: short, full: (v) => precise.format(v), axis: short },
+  };
 }
 
 function duration(seconds) {
@@ -109,9 +142,17 @@ function ga4Totals(rows) {
     newUsers: sum(rows, "newUsers"),
     pageViews: sum(rows, "pageViews"),
     keyEvents: sum(rows, "keyEvents"),
+    revenue: sum(rows, "revenue"),
+    transactions: sum(rows, "transactions"),
     // Rates are rebuilt from their components, never averaged from daily rates.
     engagementRate: sessions ? sum(rows, "engagedSessions") / sessions : NaN,
     engagementPerUser: users ? sum(rows, "engagementSeconds") / users : NaN,
+    get averageOrderValue() {
+      return this.transactions ? this.revenue / this.transactions : NaN;
+    },
+    get revenuePerSession() {
+      return sessions ? this.revenue / sessions : NaN;
+    },
   };
 }
 
@@ -171,11 +212,18 @@ function tile({ label, value, current, previous, lowerIsBetter, deltaFormat }) {
 
 /* Data loading ------------------------------------------------------------- */
 
+function reportUrl(days = state.days, filters = state.filters) {
+  const params = new URLSearchParams({ days: String(days) });
+  if (filters.device) params.set("device", filters.device);
+  if (filters.channel) params.set("channel", filters.channel);
+  return `/api/report?${params}`;
+}
+
 async function loadSnapshot(days) {
   const headers = {};
   if (state.password) headers["x-report-password"] = state.password;
 
-  const res = await fetch(`/api/report?days=${days}`, { headers });
+  const res = await fetch(reportUrl(days), { headers });
   if (res.status === 401) {
     const error = new Error("unauthorized");
     error.code = 401;
@@ -199,9 +247,45 @@ function setNotice(message) {
   notice.textContent = message;
 }
 
+function syncFilterUI(snapshot) {
+  const noFilters = !state.filters.device && !state.filters.channel;
+  const fromApi = snapshot.ga4?.channelOptions || [];
+  if (fromApi.length) state.channelOptions = fromApi;
+  else if (noFilters) state.channelOptions = (snapshot.ga4?.channels || []).map((c) => c.name);
+
+  const select = document.getElementById("filter-channel");
+  const options = ['<option value="">All channels</option>'].concat(
+    state.channelOptions.map((name) => {
+      const safe = name.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
+      return `<option value="${safe}"${name === state.filters.channel ? " selected" : ""}>${safe}</option>`;
+    }),
+  );
+  select.innerHTML = options.join("");
+  document.getElementById("filter-device").value = state.filters.device;
+  document.getElementById("filter-clear").hidden = noFilters;
+
+  const status = document.getElementById("filter-status");
+  if (noFilters) {
+    status.textContent = "";
+    return;
+  }
+  const applied = [
+    state.filters.device && `${state.filters.device} only`,
+    state.filters.channel && `${state.filters.channel} only`,
+  ].filter(Boolean);
+  // Say plainly which panels a filter could not reach, rather than letting an
+  // unfiltered search number sit under a filtered heading.
+  const caveat = state.filters.channel
+    ? " · Search Console has no channel dimension, so the search panels below ignore the channel filter"
+    : "";
+  status.textContent = `Filtered: ${applied.join(", ")}${caveat}`;
+}
+
 function render() {
   const snapshot = state.snapshot;
   if (!snapshot) return;
+
+  syncFilterUI(snapshot);
 
   const ga4 = sliceWindow(snapshot.ga4?.daily, state.days);
   const gsc = sliceWindow(snapshot.gsc?.daily, state.days);
@@ -225,8 +309,13 @@ function render() {
     `${rangeLabel(ga4.range)} · previous period ${int.format(ga4Before.sessions)} sessions`;
 
   const keyEventLabel = snapshot.ga4?.keyEventMetric === "conversions" ? "Conversions" : "Key events";
+  const cash = currencyFormatters(snapshot.currency);
+  // Revenue panels appear only when the property actually books revenue —
+  // a row of zeroed money tiles in a client presentation reads as a broken
+  // report rather than an honest "no ecommerce here".
+  const showRevenue = Boolean(snapshot.ga4?.hasRevenue) && ga4Now.revenue > 0;
 
-  document.getElementById("ga4-tiles").replaceChildren(
+  const ga4TileList = [
     tile({
       label: "Active users",
       value: compact(ga4Now.users),
@@ -265,7 +354,41 @@ function render() {
       current: ga4Now.keyEvents,
       previous: ga4Before.keyEvents,
     }),
-  );
+  ];
+
+  if (showRevenue) {
+    ga4TileList.push(
+      tile({
+        label: "Revenue",
+        value: cash.money(ga4Now.revenue),
+        current: ga4Now.revenue,
+        previous: ga4Before.revenue,
+        deltaFormat: cash.money,
+      }),
+      tile({
+        label: "Orders",
+        value: compact(ga4Now.transactions),
+        current: ga4Now.transactions,
+        previous: ga4Before.transactions,
+      }),
+      tile({
+        label: "Average order value",
+        value: cash.exact(ga4Now.averageOrderValue),
+        current: ga4Now.averageOrderValue,
+        previous: ga4Before.averageOrderValue,
+        deltaFormat: cash.exact,
+      }),
+      tile({
+        label: "Revenue / session",
+        value: cash.exact(ga4Now.revenuePerSession),
+        current: ga4Now.revenuePerSession,
+        previous: ga4Before.revenuePerSession,
+        deltaFormat: cash.exact,
+      }),
+    );
+  }
+
+  document.getElementById("ga4-tiles").replaceChildren(...ga4TileList);
 
   document.getElementById("gsc-tiles").replaceChildren(
     tile({
@@ -328,6 +451,30 @@ function render() {
     rows: [...ga4.current].reverse(),
   });
 
+  const revenuePanel = document.getElementById("revenue-panel");
+  revenuePanel.hidden = !showRevenue;
+  if (showRevenue) {
+    timeSeriesChart(document.getElementById("revenue-chart"), {
+      series: [
+        {
+          label: "Revenue",
+          color: surfaceColor("--series-3"),
+          points: ga4.current.map((r) => ({ date: r.date, value: r.revenue })),
+        },
+      ],
+      format: cash.chart,
+    });
+
+    renderTable(document.getElementById("revenue-chart-table"), {
+      columns: [
+        { label: "Date", render: (r) => prettyDate(r.date) },
+        { label: "Revenue", render: (r) => cash.exact(r.revenue) },
+        { label: "Orders", render: (r) => int.format(r.transactions) },
+      ],
+      rows: [...ga4.current].reverse(),
+    });
+  }
+
   const channels = (snapshot.ga4?.channels || []).slice(0, 8);
   document.getElementById("channels-sub").textContent =
     `Dimension tables cover the ${snapshot.window?.days ?? state.days}-day window fetched from the API.`;
@@ -340,6 +487,7 @@ function render() {
         { label: "Sessions", value: int.format(c.sessions) },
         { label: "Users", value: int.format(c.users) },
         { label: keyEventLabel, value: int.format(c.keyEvents) },
+        ...(showRevenue ? [{ label: "Revenue", value: cash.money(c.revenue) }] : []),
       ],
     })),
     color: surfaceColor("--series-1"),
@@ -352,6 +500,7 @@ function render() {
       { label: "Sessions", render: (r) => int.format(r.sessions) },
       { label: "Users", render: (r) => int.format(r.users) },
       { label: keyEventLabel, render: (r) => int.format(r.keyEvents) },
+      ...(showRevenue ? [{ label: "Revenue", render: (r) => cash.money(r.revenue) }] : []),
     ],
     rows: snapshot.ga4?.channels || [],
   });
@@ -445,17 +594,29 @@ function render() {
     { label: "Pos.", render: (r) => r.position.toFixed(1) },
   ];
 
+  // Text search runs over the already-loaded rows, so typing filters instantly
+  // without another API round trip.
+  const matching = (rows, term) => {
+    const needle = term.trim().toLowerCase();
+    return needle ? rows.filter((r) => r.name.toLowerCase().includes(needle)) : rows;
+  };
+
   renderTable(document.getElementById("queries-table"), {
     columns: searchColumns("Query"),
-    rows: (snapshot.gsc?.queries || []).slice(0, 50),
+    rows: matching(snapshot.gsc?.queries || [], state.search.queries).slice(0, 50),
+    empty: state.search.queries ? "No queries match that text." : undefined,
   });
 
   renderTable(document.getElementById("landing-table"), {
     columns: searchColumns("Page"),
-    rows: (snapshot.gsc?.pages || []).slice(0, 30).map((r) => ({
-      ...r,
-      name: r.name.replace(/^https?:\/\/[^/]+/, "") || "/",
-    })),
+    rows: matching(
+      (snapshot.gsc?.pages || []).map((r) => ({
+        ...r,
+        name: r.name.replace(/^https?:\/\/[^/]+/, "") || "/",
+      })),
+      state.search.landing,
+    ).slice(0, 30),
+    empty: state.search.landing ? "No pages match that text." : undefined,
   });
 
   renderTable(document.getElementById("pages-table"), {
@@ -463,6 +624,7 @@ function render() {
       { label: "Page", render: (r) => labelCell(r.name || "/", r.title) },
       { label: "Views", render: (r) => int.format(r.pageViews) },
       { label: "Sessions", render: (r) => int.format(r.sessions) },
+      ...(showRevenue ? [{ label: "Revenue", render: (r) => cash.money(r.revenue) }] : []),
     ],
     rows: snapshot.ga4?.pages || [],
   });
@@ -472,6 +634,7 @@ function render() {
       { label: "Source / medium", render: (r) => r.name },
       { label: "Sessions", render: (r) => int.format(r.sessions) },
       { label: "Users", render: (r) => int.format(r.users) },
+      ...(showRevenue ? [{ label: "Revenue", render: (r) => cash.money(r.revenue) }] : []),
     ],
     rows: snapshot.ga4?.sources || [],
   });
@@ -548,6 +711,33 @@ for (const button of document.querySelectorAll(".segmented__btn")) {
     }
     // The dimension tables are windowed server-side, so switching range refetches.
     refresh();
+  });
+}
+
+for (const [id, key] of [
+  ["filter-device", "device"],
+  ["filter-channel", "channel"],
+]) {
+  document.getElementById(id).addEventListener("change", (event) => {
+    state.filters[key] = event.target.value;
+    // Filters are applied by Google's APIs, so a change means a refetch. The
+    // result is cached per combination, making the second visit instant.
+    refresh();
+  });
+}
+
+document.getElementById("filter-clear").addEventListener("click", () => {
+  state.filters = { device: "", channel: "" };
+  refresh();
+});
+
+for (const [id, key] of [
+  ["queries-search", "queries"],
+  ["landing-search", "landing"],
+]) {
+  document.getElementById(id).addEventListener("input", (event) => {
+    state.search[key] = event.target.value;
+    render();
   });
 }
 
