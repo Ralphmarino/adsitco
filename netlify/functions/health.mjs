@@ -16,6 +16,21 @@ import { getAccessToken } from "../lib/google-auth.mjs";
 const GA4_SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"];
 const GSC_SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"];
 
+/**
+ * Google answers both "this API is switched off" and "this account may not read
+ * that" with a 403, and the two need opposite fixes — one is a Cloud console
+ * toggle, the other a grant inside Analytics or Search Console. Telling them
+ * apart matters: a permissions hint on a disabled API sends you to re-check a
+ * grant that was correct all along.
+ */
+function explain403(message, permissionHint) {
+  const disabled =
+    /has not been used in project|SERVICE_DISABLED|is disabled/i.test(message);
+  return disabled
+    ? `${message} — the API itself is switched off. Enable it at the link in this message, wait a minute, then reload. This is not a permissions problem.`
+    : `${message} — ${permissionHint}`;
+}
+
 function checkEnvironment() {
   const checks = [];
   // "required" blocks the report from working at all; "advisory" is a choice
@@ -138,7 +153,7 @@ async function probeGa4() {
         ok: false,
         detail:
           res.status === 403
-            ? `${message} — add the service account as a Viewer on the GA4 property.`
+            ? explain403(message, "add the service account as a Viewer on the GA4 property.")
             : message,
       };
     }
@@ -170,7 +185,7 @@ async function probeGsc() {
         ok: false,
         detail:
           res.status === 403
-            ? `${message} — add the service account under Settings → Users and permissions.`
+            ? explain403(message, "add the service account under Settings → Users and permissions.")
             : res.status === 404
               ? `${message} — GSC_SITE_URL does not match a property on this account. sc-domain:adsitco.com and https://www.adsitco.com/ are different properties.`
               : message,
