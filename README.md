@@ -111,7 +111,7 @@ with notes; the required ones are:
 | --- | --- |
 | `GOOGLE_CLIENT_EMAIL` | `client_email` from the JSON key |
 | `GOOGLE_PRIVATE_KEY` | `private_key` from the JSON key, `\n` escapes intact |
-| `GA4_PROPERTY_ID` | Numeric property ID (Admin → Property Settings) — **not** the `G-XXXX` measurement ID |
+| `GA4_PROPERTY_ID` | `315374799` — adsitco.com's numeric property ID (Admin → Property Settings). **Not** the `G-XXXX` measurement ID |
 | `GSC_SITE_URL` | Exactly as shown in Search Console: `sc-domain:adsitco.com` or `https://www.adsitco.com/` |
 | `REPORT_PASSWORD` | Shared password for viewing the report |
 | `REFRESH_TOKEN` | Separate secret that authorises `?force=1` |
