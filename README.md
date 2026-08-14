@@ -206,7 +206,30 @@ no channel dimension**, so a channel selection narrows the Analytics panels only
 When one is active, the filter bar says the search panels ignore it. Device
 filtering applies to both sources.
 
-Every stat compares against the immediately preceding period of the same length.
+**Date range** — 7 / 28 / 90 day presets, or **Custom** for any start and end
+you type. Custom ranges are capped at 365 days, because the daily history has to
+reach a year further back for year-over-year and a 365-day window already pulls
+~730 rows against the API's 1000-row page.
+
+**Comparison** — every figure compares against one of:
+
+| Basis | Window |
+| --- | --- |
+| Previous period | The equally long stretch immediately before the current one |
+| Previous year | The same calendar dates a year earlier |
+| No comparison | Deltas and comparison lines hidden |
+
+Both bases are computed from daily rows already in the snapshot, so **switching
+basis re-renders instantly with no API call**. Only changing the date range
+refetches, because the dimension tables are windowed server-side.
+
+Each comparison window is defined by its start plus the current window's length,
+never by a shifted end date — so it is exactly as many days as the current
+period even across a leap year, and the two series stay aligned on the charts.
+Note that year-over-year lands on different weekdays; on a site with a strong
+weekday rhythm, compare like-for-like weeks before drawing conclusions from a
+short window.
+
 Every chart has a **Table** toggle, and the page follows your system light/dark
 setting with a manual override.
 

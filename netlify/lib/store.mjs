@@ -15,12 +15,12 @@ function blobStore() {
   }
 }
 
-// The filter signature is part of the key: each filter combination is its own
-// cached snapshot, so switching filters never serves another view's numbers.
-const keyFor = (days, signature = "all") => `snapshot-${days}d-${signature}.json`;
+// Range and filters both form the key: each combination is its own cached
+// snapshot, so switching either never serves another view's numbers.
+const keyFor = (range, signature = "all") => `snapshot-${range}-${signature}.json`;
 
-export async function readSnapshot(days, signature) {
-  const key = keyFor(days, signature);
+export async function readSnapshot(range, signature) {
+  const key = keyFor(range, signature);
   const store = blobStore();
   if (store) {
     try {
@@ -34,8 +34,8 @@ export async function readSnapshot(days, signature) {
   return memory.get(key) ?? null;
 }
 
-export async function writeSnapshot(days, snapshot, signature) {
-  const key = keyFor(days, signature);
+export async function writeSnapshot(range, snapshot, signature) {
+  const key = keyFor(range, signature);
   memory.set(key, snapshot);
   const store = blobStore();
   if (!store) return false;

@@ -1,4 +1,4 @@
-import { buildWindow, shiftDays } from "./dates.mjs";
+import { daysAgo, shiftDays, shiftYears, daysBetween, isIsoDate } from "./dates.mjs";
 import { fetchGa4Daily, collectGa4Breakdowns } from "./ga4.mjs";
 import { fetchGscDaily, collectGscBreakdowns } from "./gsc.mjs";
 
@@ -64,6 +64,58 @@ export function normaliseWindow(value) {
   );
 }
 
+// A custom range is capped so the daily history stays inside one API page: the
+// history has to reach a year before the window start for year-over-year, so a
+// 365-day window already pulls ~730 rows against a 1000-row limit.
+export const MAX_CUSTOM_DAYS = 365;
+
+/**
+ * Turn the request into either a preset window or an explicit custom one.
+ * A malformed or reversed custom range falls back to the preset rather than
+ * erroring — a bad querystring should not take the report down.
+ */
+export function resolveRange({ days, start, end } = {}) {
+  if (isIsoDate(start) && isIsoDate(end) && start <= end) {
+    const length = Math.min(daysBetween(start, end), MAX_CUSTOM_DAYS);
+    return { mode: "custom", start: shiftDays(end, -(length - 1)), end, days: length };
+  }
+  return { mode: "preset", days: normaliseWindow(days), start: null, end: null };
+}
+
+/** Cache identity for a range. Custom ranges cache per exact start/end pair. */
+export function rangeSignature(range) {
+  return range.mode === "custom" ? `c${range.start}_${range.end}` : `p${range.days}`;
+}
+
+/**
+ * The concrete window for one source. Each source is anchored to its own last
+ * complete day — Search Console runs ~3 days behind Analytics — so a custom
+ * range ending today gives Search Console an end of today-3 rather than three
+ * empty trailing days.
+ */
+export function windowForSource(range, lagDays) {
+  const latest = daysAgo(lagDays);
+  if (range.mode === "preset") {
+    const end = latest;
+    return { start: shiftDays(end, -(range.days - 1)), end, days: range.days };
+  }
+  const end = range.end > latest ? latest : range.end;
+  const start = range.start > end ? end : range.start;
+  return { start, end, days: daysBetween(start, end) };
+}
+
+/**
+ * How far back the daily series must reach for the front end to compute both
+ * comparison bases without another request: a full window before the start for
+ * period-over-period, and the same dates a year earlier for year-over-year.
+ */
+export function historyStartFor(window) {
+  const previousPeriod = shiftDays(window.start, -window.days);
+  const previousYear = shiftYears(window.start, -1);
+  const earliest = previousYear < previousPeriod ? previousYear : previousPeriod;
+  return shiftDays(earliest, -3);
+}
+
 /**
  * Pull one complete snapshot: a long daily series from each source (which the
  * front end slices for whichever range is selected) plus dimension tables for
@@ -72,16 +124,16 @@ export function normaliseWindow(value) {
  * A failure in one source is recorded as a warning rather than aborting — a
  * report with half its panels beats a report that will not load.
  */
-export async function collectSnapshot({ days = 28, filters = {} } = {}) {
-  const history = historyDays();
+export async function collectSnapshot({ days = 28, range, filters = {} } = {}) {
   const active = normaliseFilters(filters);
-  const ga4Window = buildWindow(days, GA4_LAG_DAYS);
-  const gscWindow = buildWindow(days, GSC_LAG_DAYS);
+  const resolved = range ?? resolveRange({ days });
+  const ga4Window = windowForSource(resolved, GA4_LAG_DAYS);
+  const gscWindow = windowForSource(resolved, GSC_LAG_DAYS);
 
-  // Twice the history so the longest supported window still has a full
-  // preceding window to compare against.
-  const ga4HistoryStart = shiftDays(ga4Window.end, -(history * 2 - 1));
-  const gscHistoryStart = shiftDays(gscWindow.end, -(history * 2 - 1));
+  // Reaches back far enough that the front end can build either comparison
+  // basis from these rows alone — no second request when the basis changes.
+  const ga4HistoryStart = historyStartFor(ga4Window);
+  const gscHistoryStart = historyStartFor(gscWindow);
 
   const failures = [];
   const guard = async (label, fn, fallback) => {
@@ -136,16 +188,17 @@ export async function collectSnapshot({ days = 28, filters = {} } = {}) {
     generatedAt: new Date().toISOString(),
     siteLabel: process.env.SITE_LABEL || process.env.GSC_SITE_URL || "site",
     currency: process.env.REPORT_CURRENCY || "USD",
-    historyDays: history,
+    historyDays: historyDays(),
     filters: active,
     // Search Console has no channel dimension, so a channel selection narrows
     // the analytics panels only. The report says so instead of implying the
     // search numbers were filtered too.
     filtersAppliedToSearch: { device: Boolean(active.device), channel: false },
     window: {
-      days,
-      ga4: { start: ga4Window.start, end: ga4Window.end },
-      gsc: { start: gscWindow.start, end: gscWindow.end },
+      days: resolved.days,
+      mode: resolved.mode,
+      ga4: { start: ga4Window.start, end: ga4Window.end, days: ga4Window.days },
+      gsc: { start: gscWindow.start, end: gscWindow.end, days: gscWindow.days },
     },
     ga4: { daily: ga4Daily, ...ga4Breakdowns },
     gsc: { daily: gscDaily, ...gscBreakdowns },

@@ -186,15 +186,20 @@ export function timeSeriesChart(container, { series, format, invertY = false }) 
     el("circle", { cx: lx, cy: ly, r: 4, fill: s.color, stroke: surface, "stroke-width": 2 }, svg);
 
     // Direct end label — the endpoint only, never a number on every point.
-    const label = el("text", {
-      x: lx + 9,
-      y: ly + 4,
-      fill: token("--text-secondary"),
-      "font-size": 11.5,
-      "font-weight": 600,
-      "font-family": "inherit",
-    }, svg);
-    label.textContent = format.compact(s.points[lastIndex].value);
+    // A comparison series skips it: the two lines converge at the right edge
+    // often enough that stacked labels would collide, and the legend and
+    // tooltip already carry it.
+    if (s.endLabel !== false) {
+      const label = el("text", {
+        x: lx + 9,
+        y: ly + 4,
+        fill: token("--text-secondary"),
+        "font-size": 11.5,
+        "font-weight": 600,
+        "font-family": "inherit",
+      }, svg);
+      label.textContent = format.compact(s.points[lastIndex].value);
+    }
   }
 
   el("line", {
@@ -256,12 +261,18 @@ export function timeSeriesChart(container, { series, format, invertY = false }) 
     });
 
     const rows = series
-      .map(
-        (s) =>
-          `<div class="tooltip__row"><span class="tooltip__key"><span class="chart__swatch" style="background:${s.color}"></span>${s.label}</span><span class="tooltip__value">${format.full(
-            s.points[i].value,
-          )}</span></div>`,
-      )
+      .map((s) => {
+        const point = s.points[i];
+        // A comparison series sits at the same index but a different date, so
+        // it carries its own date rather than borrowing the header's.
+        const ownDate =
+          point.date && point.date !== points[i].date
+            ? ` <span class="tooltip__when">${shortDate(point.date)}</span>`
+            : "";
+        return `<div class="tooltip__row"><span class="tooltip__key"><span class="chart__swatch" style="background:${s.color}"></span>${s.label}${ownDate}</span><span class="tooltip__value">${format.full(
+          point.value,
+        )}</span></div>`;
+      })
       .join("");
     showTooltip(`<div class="tooltip__date">${shortDate(points[i].date)}</div>${rows}`, event);
   });

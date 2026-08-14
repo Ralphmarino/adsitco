@@ -5,6 +5,10 @@ const PASSWORD_KEY = "adsitco-report-password";
 
 const state = {
   days: 28,
+  // null for a preset window; {start, end} for a custom one.
+  custom: null,
+  // "period" | "year" | "none"
+  comparison: "period",
   demo: new URLSearchParams(location.search).get("demo") === "1",
   filters: { device: "", channel: "" },
   // Captured from the first unfiltered load so the dropdown still lists every
@@ -97,6 +101,45 @@ function shiftISO(iso, delta) {
   return d.toISOString().slice(0, 10);
 }
 
+function shiftYearsISO(iso, delta) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCFullYear(d.getUTCFullYear() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+function daysBetweenISO(startIso, endIso) {
+  return Math.floor((new Date(`${endIso}T00:00:00Z`) - new Date(`${startIso}T00:00:00Z`)) / 86_400_000) + 1;
+}
+
+/**
+ * The window a comparison points at.
+ *
+ * Period-over-period is the equally long stretch immediately before the current
+ * one. Year-over-year is the same calendar dates a year earlier — which is what
+ * the phrase normally means in a business report, though it does put the
+ * comparison on different weekdays.
+ */
+function comparisonRange(range, basis) {
+  if (!range || basis === "none") return null;
+  const length = daysBetweenISO(range.start, range.end);
+  // Both bases are defined by start + the current window's length, never by a
+  // shifted end date. That keeps the comparison exactly as many days as the
+  // current period even across a leap year, so the two series stay index-
+  // aligned on the charts.
+  if (basis === "year") {
+    const start = shiftYearsISO(range.start, -1);
+    return { start, end: shiftISO(start, length - 1) };
+  }
+  const end = shiftISO(range.start, -1);
+  return { start: shiftISO(end, -(length - 1)), end };
+}
+
+const COMPARISON_LABEL = {
+  period: "previous period",
+  year: "previous year",
+  none: "",
+};
+
 /** Fill gaps so a day with no data plots as zero rather than closing the line. */
 function densify(rows, start, end) {
   const byDate = new Map(rows.map((r) => [r.date, r]));
@@ -117,18 +160,26 @@ function densify(rows, start, end) {
  * stored daily series. Every visible number comes from these rows, so switching
  * range never needs another API call.
  */
-function sliceWindow(daily, days) {
-  if (!daily?.length) return { current: [], previous: [], range: null, previousRange: null };
-  const end = daily[daily.length - 1].date;
-  const start = shiftISO(end, -(days - 1));
-  const previousEnd = shiftISO(start, -1);
-  const previousStart = shiftISO(previousEnd, -(days - 1));
+function sliceWindow(daily, range, basis) {
+  if (!daily?.length || !range?.start) {
+    return { current: [], previous: [], range: range ?? null, previousRange: null };
+  }
   const within = (row, a, b) => row.date >= a && row.date <= b;
+  const previousRange = comparisonRange(range, basis);
   return {
-    current: densify(daily.filter((r) => within(r, start, end)), start, end),
-    previous: daily.filter((r) => within(r, previousStart, previousEnd)),
-    range: { start, end },
-    previousRange: { start: previousStart, end: previousEnd },
+    // The window comes from the snapshot rather than the last row in the
+    // series, so a custom range still reads correctly when a source has no
+    // data on its final days.
+    current: densify(daily.filter((r) => within(r, range.start, range.end)), range.start, range.end),
+    previous: previousRange
+      ? densify(
+          daily.filter((r) => within(r, previousRange.start, previousRange.end)),
+          previousRange.start,
+          previousRange.end,
+        )
+      : [],
+    range,
+    previousRange,
   };
 }
 
@@ -175,8 +226,13 @@ function gscTotals(rows) {
 
 function deltaNode(current, previous, { lowerIsBetter = false, format = compact } = {}) {
   const node = document.createElement("span");
+  if (state.comparison === "none") {
+    node.textContent = "";
+    return node;
+  }
   if (!Number.isFinite(current) || !Number.isFinite(previous) || previous === 0) {
-    node.textContent = "no prior period";
+    node.textContent =
+      state.comparison === "year" ? "no data a year earlier" : "no prior period";
     return node;
   }
   const change = (current - previous) / Math.abs(previous);
@@ -184,8 +240,9 @@ function deltaNode(current, previous, { lowerIsBetter = false, format = compact 
   const flat = Math.abs(change) < 0.0005;
   node.className = flat ? "" : improving ? "delta--up" : "delta--down";
   const arrow = flat ? "→" : change > 0 ? "↑" : "↓";
-  node.textContent = `${arrow} ${Math.abs(change * 100).toFixed(1)}% vs previous period`;
-  node.title = `Previous period: ${format(previous)}`;
+  const basis = COMPARISON_LABEL[state.comparison];
+  node.textContent = `${arrow} ${Math.abs(change * 100).toFixed(1)}% vs ${basis}`;
+  node.title = `${basis[0].toUpperCase()}${basis.slice(1)}: ${format(previous)}`;
   return node;
 }
 
@@ -201,20 +258,32 @@ function tile({ label, value, current, previous, lowerIsBetter, deltaFormat }) {
   valueEl.className = "tile__value";
   valueEl.textContent = value;
 
-  const deltaEl = document.createElement("p");
-  deltaEl.className = "tile__delta";
-  deltaEl.appendChild(
-    deltaNode(current, previous, { lowerIsBetter, format: deltaFormat || compact }),
-  );
+  card.append(labelEl, valueEl);
 
-  card.append(labelEl, valueEl, deltaEl);
+  // With no comparison selected there is no delta to show, and an empty line
+  // would still reserve its height and leave the tiles looking unfinished.
+  if (state.comparison !== "none") {
+    const deltaEl = document.createElement("p");
+    deltaEl.className = "tile__delta";
+    deltaEl.appendChild(
+      deltaNode(current, previous, { lowerIsBetter, format: deltaFormat || compact }),
+    );
+    card.appendChild(deltaEl);
+  }
+
   return card;
 }
 
 /* Data loading ------------------------------------------------------------- */
 
 function reportUrl(days = state.days, filters = state.filters) {
-  const params = new URLSearchParams({ days: String(days) });
+  const params = new URLSearchParams();
+  if (state.custom) {
+    params.set("start", state.custom.start);
+    params.set("end", state.custom.end);
+  } else {
+    params.set("days", String(days));
+  }
   if (filters.device) params.set("device", filters.device);
   if (filters.channel) params.set("channel", filters.channel);
   return `/api/report?${params}`;
@@ -344,8 +413,9 @@ function render() {
 
   syncFilterUI(snapshot);
 
-  const ga4 = sliceWindow(snapshot.ga4?.daily, state.days);
-  const gsc = sliceWindow(snapshot.gsc?.daily, state.days);
+  const basis = state.comparison;
+  const ga4 = sliceWindow(snapshot.ga4?.daily, snapshot.window?.ga4, basis);
+  const gsc = sliceWindow(snapshot.gsc?.daily, snapshot.window?.gsc, basis);
   const ga4Now = ga4Totals(ga4.current);
   const ga4Before = ga4Totals(ga4.previous);
   const gscNow = gscTotals(gsc.current);
@@ -354,8 +424,14 @@ function render() {
   // The logo beside this already says who the report is for, so the heading
   // names the report rather than repeating the brand.
   document.getElementById("site-label").textContent = "Search & analytics report";
+  const windowLabel =
+    snapshot.window?.mode === "custom"
+      ? `${snapshot.window.days} days`
+      : `Last ${snapshot.window?.days ?? state.days} days`;
+  const comparedTo =
+    basis === "none" ? "" : ` · vs ${COMPARISON_LABEL[basis]} ${rangeLabel(ga4.previousRange)}`;
   document.getElementById("range-meta").textContent =
-    `Last ${state.days} days · analytics ${rangeLabel(ga4.range)} · search ${rangeLabel(gsc.range)}`;
+    `${windowLabel} · analytics ${rangeLabel(ga4.range)} · search ${rangeLabel(gsc.range)}${comparedTo}`;
   document.getElementById("ga4-range").textContent = rangeLabel(ga4.range);
   document.getElementById("gsc-range").textContent =
     `${rangeLabel(gsc.range)} · Search Console runs ~3 days behind`;
@@ -365,7 +441,9 @@ function render() {
   const heroDelta = document.getElementById("hero-delta");
   heroDelta.replaceChildren(deltaNode(ga4Now.sessions, ga4Before.sessions));
   document.getElementById("hero-sub").textContent =
-    `${rangeLabel(ga4.range)} · previous period ${int.format(ga4Before.sessions)} sessions`;
+    basis === "none"
+      ? rangeLabel(ga4.range)
+      : `${rangeLabel(ga4.range)} · ${COMPARISON_LABEL[basis]} ${int.format(ga4Before.sessions)} sessions (${rangeLabel(ga4.previousRange)})`;
 
   const keyEventLabel = snapshot.ga4?.keyEventMetric === "conversions" ? "Conversions" : "Key events";
   const cash = currencyFormatters(snapshot.currency);
@@ -484,29 +562,55 @@ function render() {
 
   /* Charts */
 
+  /**
+   * One metric, plus the comparison period as a second line when a basis is
+   * selected. The comparison wears the muted ink rather than a second brand
+   * hue — it is the same measure at a different time, not a different measure,
+   * so it should recede rather than compete.
+   */
+  const metricSeries = (slice, key, label, color) => {
+    const series = [
+      { label, color, points: slice.current.map((r) => ({ date: r.date, value: r[key] })) },
+    ];
+    if (slice.previous.length) {
+      series.push({
+        label: COMPARISON_LABEL[basis],
+        color: surfaceColor("--text-muted"),
+        endLabel: false,
+        points: slice.previous.map((r) => ({ date: r.date, value: r[key] })),
+      });
+    }
+    return series;
+  };
+
+  const comparisonNote = basis === "none" ? "" : ` Compared with the ${COMPARISON_LABEL[basis]}.`;
+  document.getElementById("traffic-chart-sub").textContent =
+    `Daily sessions across the selected range.${comparisonNote}`;
+  document.getElementById("users-chart-sub").textContent =
+    `Daily active users across the selected range.${comparisonNote}`;
+
   timeSeriesChart(document.getElementById("traffic-chart"), {
-    series: [
-      {
-        label: "Sessions",
-        color: surfaceColor("--series-1"),
-        points: ga4.current.map((r) => ({ date: r.date, value: r.sessions })),
-      },
-      {
-        label: "Active users",
-        color: surfaceColor("--series-2"),
-        points: ga4.current.map((r) => ({ date: r.date, value: r.users })),
-      },
-    ],
+    series: metricSeries(ga4, "sessions", "Sessions", surfaceColor("--series-1")),
     format: fmt.count,
   });
 
+  timeSeriesChart(document.getElementById("users-chart"), {
+    series: metricSeries(ga4, "users", "Active users", surfaceColor("--series-2")),
+    format: fmt.count,
+  });
+
+  const dailyGa4Columns = [
+    { label: "Date", render: (r) => prettyDate(r.date) },
+    { label: "Sessions", render: (r) => int.format(r.sessions) },
+    { label: "Users", render: (r) => int.format(r.users) },
+    { label: "Page views", render: (r) => int.format(r.pageViews) },
+  ];
   renderTable(document.getElementById("traffic-chart-table"), {
-    columns: [
-      { label: "Date", render: (r) => prettyDate(r.date) },
-      { label: "Sessions", render: (r) => int.format(r.sessions) },
-      { label: "Users", render: (r) => int.format(r.users) },
-      { label: "Page views", render: (r) => int.format(r.pageViews) },
-    ],
+    columns: dailyGa4Columns,
+    rows: [...ga4.current].reverse(),
+  });
+  renderTable(document.getElementById("users-chart-table"), {
+    columns: dailyGa4Columns,
     rows: [...ga4.current].reverse(),
   });
 
@@ -514,13 +618,7 @@ function render() {
   revenuePanel.hidden = !showRevenue;
   if (showRevenue) {
     timeSeriesChart(document.getElementById("revenue-chart"), {
-      series: [
-        {
-          label: "Revenue",
-          color: surfaceColor("--series-3"),
-          points: ga4.current.map((r) => ({ date: r.date, value: r.revenue })),
-        },
-      ],
+      series: metricSeries(ga4, "revenue", "Revenue", surfaceColor("--series-3")),
       format: cash.chart,
     });
 
@@ -565,13 +663,7 @@ function render() {
   });
 
   timeSeriesChart(document.getElementById("clicks-chart"), {
-    series: [
-      {
-        label: "Clicks",
-        color: surfaceColor("--series-1"),
-        points: gsc.current.map((r) => ({ date: r.date, value: r.clicks })),
-      },
-    ],
+    series: metricSeries(gsc, "clicks", "Clicks", surfaceColor("--series-1")),
     format: fmt.count,
   });
 
@@ -584,13 +676,7 @@ function render() {
   });
 
   timeSeriesChart(document.getElementById("impressions-chart"), {
-    series: [
-      {
-        label: "Impressions",
-        color: surfaceColor("--series-2"),
-        points: gsc.current.map((r) => ({ date: r.date, value: r.impressions })),
-      },
-    ],
+    series: metricSeries(gsc, "impressions", "Impressions", surfaceColor("--series-2")),
     format: fmt.count,
   });
 
@@ -838,18 +924,59 @@ document.getElementById("gate-form").addEventListener("submit", (event) => {
   refresh();
 });
 
+function markActiveRange(value) {
+  for (const other of document.querySelectorAll(".segmented__btn")) {
+    other.classList.toggle("is-active", other.dataset.days === String(value));
+  }
+  document.getElementById("custom-range").hidden = value !== "custom";
+}
+
 for (const button of document.querySelectorAll(".segmented__btn")) {
   button.addEventListener("click", () => {
-    const days = Number(button.dataset.days);
-    if (!SUPPORTED_WINDOWS.includes(days) || days === state.days) return;
-    state.days = days;
-    for (const other of document.querySelectorAll(".segmented__btn")) {
-      other.classList.toggle("is-active", other === button);
+    const value = button.dataset.days;
+
+    if (value === "custom") {
+      markActiveRange("custom");
+      // Seed the inputs with the window already on screen so Apply is a nudge
+      // rather than a blank form.
+      const current = state.snapshot?.window?.ga4;
+      const startInput = document.getElementById("range-start");
+      const endInput = document.getElementById("range-end");
+      if (current && !startInput.value) startInput.value = current.start;
+      if (current && !endInput.value) endInput.value = current.end;
+      return;
     }
-    // The dimension tables are windowed server-side, so switching range refetches.
+
+    const days = Number(value);
+    if (!SUPPORTED_WINDOWS.includes(days)) return;
+    if (days === state.days && !state.custom) return;
+    state.days = days;
+    state.custom = null;
+    markActiveRange(days);
+    // The dimension tables are windowed server-side, so a new range refetches.
     refresh();
   });
 }
+
+document.getElementById("range-apply").addEventListener("click", () => {
+  const start = document.getElementById("range-start").value;
+  const end = document.getElementById("range-end").value;
+  if (!start || !end) return setNotice("Pick both a start and an end date.");
+  if (start > end) return setNotice("The start date must come before the end date.");
+  if (daysBetweenISO(start, end) > 365) {
+    return setNotice("Custom ranges are capped at 365 days so year-over-year still fits in one query.");
+  }
+  setNotice("");
+  state.custom = { start, end };
+  refresh();
+});
+
+// Both comparison bases are computed from daily rows the snapshot already
+// carries, so switching basis re-renders without another API round trip.
+document.getElementById("comparison").addEventListener("change", (event) => {
+  state.comparison = event.target.value;
+  render();
+});
 
 for (const [id, key] of [
   ["filter-device", "device"],

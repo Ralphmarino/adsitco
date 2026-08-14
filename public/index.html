@@ -80,6 +80,7 @@
             <button class="segmented__btn" data-days="7" type="button">7d</button>
             <button class="segmented__btn is-active" data-days="28" type="button">28d</button>
             <button class="segmented__btn" data-days="90" type="button">90d</button>
+            <button class="segmented__btn" data-days="custom" type="button">Custom</button>
           </div>
           <button class="btn" id="theme-toggle" type="button" aria-label="Toggle colour theme">
             Theme
@@ -88,6 +89,25 @@
       </header>
 
       <div class="filterbar">
+        <div class="field field--range" id="custom-range" hidden>
+          <span class="field__label">Custom range</span>
+          <div class="field__row">
+            <input class="field__control" id="range-start" type="date" aria-label="Start date" />
+            <span class="field__sep">to</span>
+            <input class="field__control" id="range-end" type="date" aria-label="End date" />
+            <button class="btn btn--primary btn--compact" id="range-apply" type="button">Apply</button>
+          </div>
+        </div>
+
+        <label class="field">
+          <span class="field__label">Compare to</span>
+          <select class="field__control" id="comparison">
+            <option value="period">Previous period</option>
+            <option value="year">Previous year</option>
+            <option value="none">No comparison</option>
+          </select>
+        </label>
+
         <label class="field">
           <span class="field__label">Device</span>
           <select class="field__control" id="filter-device">
@@ -136,19 +156,38 @@
           <div class="tiles" id="ga4-tiles"></div>
         </section>
 
-        <section class="panel" aria-labelledby="traffic-chart-heading">
-          <div class="panel__head">
-            <div>
-              <h2 class="panel__title" id="traffic-chart-heading">Sessions and users over time</h2>
-              <p class="panel__sub">Daily totals across the selected range.</p>
+        <!-- One metric per chart. A comparison basis adds a second line to each,
+             which is why sessions and users are no longer share a panel: four
+             lines on one axis is where a chart stops being readable. -->
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="traffic-chart-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="traffic-chart-heading">Sessions over time</h2>
+                <p class="panel__sub" id="traffic-chart-sub">Daily totals across the selected range.</p>
+              </div>
+              <button class="btn btn--ghost" type="button" data-table-toggle="traffic-chart">
+                Table
+              </button>
             </div>
-            <button class="btn btn--ghost" type="button" data-table-toggle="traffic-chart">
-              Table
-            </button>
-          </div>
-          <div class="chart" id="traffic-chart"></div>
-          <div class="table-view" id="traffic-chart-table" hidden></div>
-        </section>
+            <div class="chart" id="traffic-chart"></div>
+            <div class="table-view" id="traffic-chart-table" hidden></div>
+          </section>
+
+          <section class="panel" aria-labelledby="users-chart-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="users-chart-heading">Active users over time</h2>
+                <p class="panel__sub" id="users-chart-sub">Daily totals across the selected range.</p>
+              </div>
+              <button class="btn btn--ghost" type="button" data-table-toggle="users-chart">
+                Table
+              </button>
+            </div>
+            <div class="chart" id="users-chart"></div>
+            <div class="table-view" id="users-chart-table" hidden></div>
+          </section>
+        </div>
 
         <section class="panel" id="revenue-panel" aria-labelledby="revenue-heading" hidden>
           <div class="panel__head">

@@ -1,7 +1,8 @@
 import { checkViewerAuth, checkRefreshAuth, json } from "../lib/auth.mjs";
 import {
   collectSnapshot,
-  normaliseWindow,
+  resolveRange,
+  rangeSignature,
   normaliseFilters,
   filterSignature,
   hasUsableData,
@@ -28,7 +29,12 @@ export default async (req) => {
   }
 
   const url = new URL(req.url);
-  const days = normaliseWindow(url.searchParams.get("days") ?? 28);
+  const range = resolveRange({
+    days: url.searchParams.get("days") ?? 28,
+    start: url.searchParams.get("start"),
+    end: url.searchParams.get("end"),
+  });
+  const rangeKey = rangeSignature(range);
   const filters = normaliseFilters({
     device: url.searchParams.get("device"),
     channel: url.searchParams.get("channel"),
@@ -41,7 +47,7 @@ export default async (req) => {
     return json({ error: "forbidden", message: "Valid x-refresh-token required to force a refresh." }, 403);
   }
 
-  const cached = await readSnapshot(days, signature);
+  const cached = await readSnapshot(rangeKey, signature);
   const stale = !cached || ageInMinutes(cached) > staleAfter(cached);
 
   if (!force && !stale) {
@@ -49,9 +55,9 @@ export default async (req) => {
   }
 
   try {
-    const snapshot = await collectSnapshot({ days, filters });
+    const snapshot = await collectSnapshot({ range, filters });
     // Show an empty result, but never store it — see hasUsableData.
-    if (hasUsableData(snapshot)) await writeSnapshot(days, snapshot, signature);
+    if (hasUsableData(snapshot)) await writeSnapshot(rangeKey, snapshot, signature);
     return json({ ...snapshot, cache: force ? "forced" : "miss" });
   } catch (err) {
     if (cached) {
