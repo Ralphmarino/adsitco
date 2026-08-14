@@ -718,9 +718,15 @@ function render() {
 
   document.getElementById("generated-at").textContent =
     `Data pulled ${new Date(snapshot.generatedAt).toLocaleString()} · refreshes daily`;
-  document.getElementById("raw-link").href = `/api/report?days=${state.days}`;
+  document.getElementById("raw-link").href = reportUrl();
 
-  setNotice((snapshot.warnings || []).join(" · "));
+  const warnings = snapshot.warnings || [];
+  setNotice(warnings.join(" · "));
+
+  // Warnings mean something is misconfigured, so surface the whole checklist
+  // rather than one sentence. Sample mode has no live config to check.
+  if (warnings.length && !snapshot.sample) showDiagnostics();
+  else document.getElementById("diagnostics").hidden = true;
 }
 
 /* Wiring ------------------------------------------------------------------- */
@@ -733,6 +739,51 @@ function showGate(message) {
   error.hidden = !message;
   error.textContent = message || "";
   document.getElementById("gate-input").focus();
+}
+
+/**
+ * Pull /api/health and list every check on the page. Shown whenever the report
+ * fails or reports warnings, so diagnosing a setup problem never requires a
+ * terminal — the answer appears where the problem does.
+ */
+async function showDiagnostics() {
+  const panel = document.getElementById("diagnostics");
+  const list = document.getElementById("diagnostics-list");
+  const title = document.getElementById("diagnostics-title");
+
+  const item = (ok, name, detail) => {
+    const li = document.createElement("li");
+    li.className = "diagnostics__item";
+    const mark = document.createElement("span");
+    mark.className = `diagnostics__mark diagnostics__mark--${ok ? "ok" : "bad"}`;
+    mark.textContent = ok ? "✓" : "✗";
+    const label = document.createElement("span");
+    label.className = "diagnostics__name";
+    label.textContent = name;
+    const text = document.createElement("span");
+    text.className = "diagnostics__detail";
+    text.textContent = detail;
+    li.append(mark, label, text);
+    return li;
+  };
+
+  try {
+    const headers = {};
+    if (state.password) headers["x-report-password"] = state.password;
+    const res = await fetch("/api/health", { headers });
+    const body = await res.json();
+
+    title.textContent = body.ready ? "Setup check — all connected" : "Setup check";
+    list.replaceChildren(
+      ...[...(body.environment || []), ...(body.probes || [])].map((c) =>
+        item(c.ok, c.name, c.detail),
+      ),
+    );
+    panel.hidden = false;
+  } catch (err) {
+    list.replaceChildren(item(false, "Setup check", `Could not reach /api/health: ${err.message}`));
+    panel.hidden = false;
+  }
 }
 
 function offerSampleMode(message) {
@@ -762,6 +813,7 @@ async function refresh() {
     }
     document.getElementById("app").hidden = false;
     offerSampleMode(`Could not load live data: ${err.message}.`);
+    showDiagnostics();
   }
 }
 

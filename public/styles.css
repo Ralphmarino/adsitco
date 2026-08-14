@@ -410,6 +410,67 @@ body {
   border-bottom: 1px solid var(--border);
 }
 
+/* Setup diagnostics --------------------------------------------------------- */
+
+.diagnostics {
+  margin: 0;
+  padding: 14px clamp(16px, 4vw, 40px) 18px;
+  background: var(--wash);
+  border-bottom: 1px solid var(--border);
+}
+
+.diagnostics__title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.diagnostics__list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 5px;
+  max-width: 900px;
+}
+
+.diagnostics__item {
+  display: grid;
+  grid-template-columns: 16px auto 1fr;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+
+.diagnostics__mark {
+  font-weight: 700;
+  line-height: 1;
+}
+
+.diagnostics__mark--ok {
+  color: var(--delta-up);
+}
+
+.diagnostics__mark--bad {
+  color: var(--delta-down);
+}
+
+.diagnostics__name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.diagnostics__detail {
+  color: var(--text-muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .page {
   display: grid;
   gap: 18px;

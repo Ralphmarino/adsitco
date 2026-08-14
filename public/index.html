@@ -111,6 +111,14 @@
 
       <p class="notice" id="notice" role="status" hidden></p>
 
+      <!-- Filled from /api/health whenever the report cannot load or comes back
+           with warnings. The alternative was asking for a terminal command at
+           exactly the moment someone is least inclined to open a terminal. -->
+      <section class="diagnostics" id="diagnostics" hidden>
+        <h2 class="diagnostics__title" id="diagnostics-title">Setup check</h2>
+        <ul class="diagnostics__list" id="diagnostics-list"></ul>
+      </section>
+
       <main class="page">
         <!-- Headline ------------------------------------------------------ -->
         <section class="panel panel--hero" aria-labelledby="hero-heading">
