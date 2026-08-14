@@ -122,8 +122,32 @@ Connect the repo in Netlify and deploy. Build settings come from `netlify.toml`
 (publish `public/`, functions in `netlify/functions`), so the defaults are
 already correct.
 
-First load pulls live data and may take a few seconds; every load after that is
-served from cache.
+**Environment variables only reach the functions at build time.** If you add or
+change one after a deploy, trigger a new deploy — otherwise the running
+functions keep the old values and nothing appears to change.
+
+### 5. Check it with `/api/health`
+
+Open `https://<your-site>.netlify.app/api/health`. It checks each variable and
+then actually calls both Google APIs, naming the first thing that is wrong:
+
+```json
+{
+  "ready": false,
+  "summary": "1 item to fix — work top to bottom.",
+  "nextStep": "Start with: Search Console access — User does not have sufficient permission…",
+  "warnings": ["REFRESH_TOKEN: Not set — ?force=1 refreshes are disabled."]
+}
+```
+
+`"ready": true` means both APIs answered and the report will load. The endpoint
+reports whether a value is present and correctly shaped — it never echoes a
+secret back. It is behind the same password as the report, so it is open only
+while `REPORT_PASSWORD` is still unset, which is what makes it usable during
+first-time setup.
+
+First load of the report pulls live data and takes a few seconds; every load
+after that is served from cache.
 
 ---
 
@@ -283,6 +307,9 @@ Netlify ever sees your analytics.
 | `GOOGLE_PRIVATE_KEY could not be used to sign` | Key truncated on paste — it must include the `BEGIN`/`END` lines |
 | Search Console panels empty, Analytics fine | `GSC_SITE_URL` does not exactly match the property in Search Console (`sc-domain:` vs `https://`) |
 | Report loads but every number is zero | Wrong `GA4_PROPERTY_ID` — check it is the numeric ID, not `G-XXXX` |
+
+`/api/health` diagnoses all of these directly — check it before reading the
+table above.
 
 Scheduled-run output is under **Netlify → Logs → Functions → refresh**; each run
 logs a JSON line with per-window row counts and any warnings.
