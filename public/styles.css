@@ -446,6 +446,15 @@ body {
   color: var(--text-secondary);
 }
 
+.diagnostics__item--note {
+  display: block;
+  color: var(--text-secondary);
+  border-left: 3px solid var(--brand-orange);
+  padding: 2px 0 2px 9px;
+  margin-bottom: 4px;
+  max-width: 70ch;
+}
+
 .diagnostics__mark {
   font-weight: 700;
   line-height: 1;

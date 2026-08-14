@@ -725,7 +725,7 @@ function render() {
 
   // Warnings mean something is misconfigured, so surface the whole checklist
   // rather than one sentence. Sample mode has no live config to check.
-  if (warnings.length && !snapshot.sample) showDiagnostics();
+  if (warnings.length && !snapshot.sample) showDiagnostics({ staleWarnings: true });
   else document.getElementById("diagnostics").hidden = true;
 }
 
@@ -746,7 +746,7 @@ function showGate(message) {
  * fails or reports warnings, so diagnosing a setup problem never requires a
  * terminal — the answer appears where the problem does.
  */
-async function showDiagnostics() {
+async function showDiagnostics({ staleWarnings = false } = {}) {
   const panel = document.getElementById("diagnostics");
   const list = document.getElementById("diagnostics-list");
   const title = document.getElementById("diagnostics-title");
@@ -773,12 +773,26 @@ async function showDiagnostics() {
     const res = await fetch("/api/health", { headers });
     const body = await res.json();
 
-    title.textContent = body.ready ? "Setup check — all connected" : "Setup check";
-    list.replaceChildren(
-      ...[...(body.environment || []), ...(body.probes || [])].map((c) =>
-        item(c.ok, c.name, c.detail),
-      ),
+    const rows = [...(body.environment || []), ...(body.probes || [])].map((c) =>
+      item(c.ok, c.name, c.detail),
     );
+
+    // Health queries Google live; the figures come from a cached snapshot. Once
+    // a misconfiguration is fixed the two disagree until the cache turns over,
+    // and "all connected" sitting above an error and a row of zeros reads as a
+    // broken report. Say which is which.
+    if (body.ready && staleWarnings) {
+      title.textContent = "Setup check — all connected, refreshing";
+      const note = document.createElement("li");
+      note.className = "diagnostics__item diagnostics__item--note";
+      note.textContent =
+        "Configuration is now correct. The figures below come from a cached run made before it was fixed, and refresh automatically within 15 minutes — the warning above will clear with them.";
+      rows.unshift(note);
+    } else {
+      title.textContent = body.ready ? "Setup check — all connected" : "Setup check";
+    }
+
+    list.replaceChildren(...rows);
     panel.hidden = false;
   } catch (err) {
     list.replaceChildren(item(false, "Setup check", `Could not reach /api/health: ${err.message}`));
