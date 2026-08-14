@@ -116,6 +116,19 @@ with notes; the required ones are:
 | `REPORT_PASSWORD` | Shared password for viewing the report |
 | `REFRESH_TOKEN` | Separate secret that authorises `?force=1` |
 
+Mark `GOOGLE_PRIVATE_KEY`, `REPORT_PASSWORD` and `REFRESH_TOKEN` as **secret** in
+Netlify. Every environment variable here is read at request time inside a
+function — the build command is `echo` and nothing reads `process.env` during a
+build — so making them write-only and runtime-only costs this project nothing.
+
+Leave `GOOGLE_CLIENT_EMAIL` readable. It identifies the service account rather
+than authenticating it, and seeing it in the UI tells you which account is
+wired up.
+
+A secret value cannot be read back afterwards, only overwritten. That is what
+`/api/health` compensates for: it reports the key's length and whether its
+BEGIN/END lines are present without ever echoing the value.
+
 ### 4. Deploy
 
 Connect the repo in Netlify and deploy. Build settings come from `netlify.toml`
