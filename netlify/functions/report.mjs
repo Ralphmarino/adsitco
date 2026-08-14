@@ -4,6 +4,7 @@ import {
   normaliseWindow,
   normaliseFilters,
   filterSignature,
+  hasUsableData,
 } from "../lib/collect.mjs";
 import { readSnapshot, writeSnapshot, ageInMinutes } from "../lib/store.mjs";
 
@@ -11,6 +12,14 @@ import { readSnapshot, writeSnapshot, ageInMinutes } from "../lib/store.mjs";
 // failed job, a window nobody has viewed yet — the first reader past this age
 // pulls fresh data instead of showing a stale report.
 const STALE_AFTER_MINUTES = 12 * 60;
+
+// A snapshot that recorded warnings is retried far sooner. Whatever caused them
+// is usually being actively fixed, and holding a degraded result for half a day
+// makes the fix look like it did not work.
+const DEGRADED_STALE_AFTER_MINUTES = 15;
+
+const staleAfter = (snapshot) =>
+  snapshot?.warnings?.length ? DEGRADED_STALE_AFTER_MINUTES : STALE_AFTER_MINUTES;
 
 export default async (req) => {
   const auth = checkViewerAuth(req);
@@ -33,7 +42,7 @@ export default async (req) => {
   }
 
   const cached = await readSnapshot(days, signature);
-  const stale = !cached || ageInMinutes(cached) > STALE_AFTER_MINUTES;
+  const stale = !cached || ageInMinutes(cached) > staleAfter(cached);
 
   if (!force && !stale) {
     return json({ ...cached, cache: "hit" });
@@ -41,7 +50,8 @@ export default async (req) => {
 
   try {
     const snapshot = await collectSnapshot({ days, filters });
-    await writeSnapshot(days, snapshot, signature);
+    // Show an empty result, but never store it — see hasUsableData.
+    if (hasUsableData(snapshot)) await writeSnapshot(days, snapshot, signature);
     return json({ ...snapshot, cache: force ? "forced" : "miss" });
   } catch (err) {
     if (cached) {

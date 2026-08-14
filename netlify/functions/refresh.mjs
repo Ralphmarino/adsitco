@@ -1,4 +1,4 @@
-import { collectSnapshot, SUPPORTED_WINDOWS } from "../lib/collect.mjs";
+import { collectSnapshot, SUPPORTED_WINDOWS, hasUsableData } from "../lib/collect.mjs";
 import { writeSnapshot } from "../lib/store.mjs";
 
 /**
@@ -19,11 +19,15 @@ export default async () => {
       // collected on demand and cached from then on — pre-warming every
       // combination would multiply the API calls for views nobody may open.
       const snapshot = await collectSnapshot({ days });
-      const persisted = await writeSnapshot(days, snapshot, "all");
+      // Same rule as the read path: never overwrite good cached data with an
+      // empty result from a run that could not reach Google.
+      const usable = hasUsableData(snapshot);
+      const persisted = usable ? await writeSnapshot(days, snapshot, "all") : false;
       results.push({
         days,
-        ok: true,
+        ok: usable,
         persisted,
+        skipped: usable ? undefined : "no data returned — cache left untouched",
         ga4Rows: snapshot.ga4.daily.length,
         gscRows: snapshot.gsc.daily.length,
         warnings: snapshot.warnings,

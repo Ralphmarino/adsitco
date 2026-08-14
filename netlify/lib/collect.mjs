@@ -34,6 +34,19 @@ export function normaliseFilters(params) {
   };
 }
 
+/**
+ * Whether a snapshot is worth caching.
+ *
+ * collectSnapshot deliberately does not throw when a source fails — half a
+ * report beats none — which means a run during a misconfiguration returns a
+ * well-formed snapshot containing nothing. Persisting one of those pins the
+ * failure in the cache, and because Netlify Blobs outlive deploys, no amount of
+ * redeploying clears it. So an empty result is shown but never stored.
+ */
+export function hasUsableData(snapshot) {
+  return Boolean(snapshot?.ga4?.daily?.length || snapshot?.gsc?.daily?.length);
+}
+
 export function filterSignature(filters) {
   const parts = [];
   if (filters.device) parts.push(`d:${filters.device}`);
