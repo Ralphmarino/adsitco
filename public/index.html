@@ -17,25 +17,29 @@
     <!-- Password gate. Shown only when /api/report answers 401. -->
     <div id="gate" class="gate" hidden>
       <form class="gate__card" id="gate-form">
-        <img
-          class="gate__logo"
-          src="/adsitco-redesign-light-resize.png"
-          width="160"
-          height="53"
-          alt="Adsitco"
-        />
-        <h1 class="gate__title">Report access</h1>
-        <p class="gate__hint">This report contains private analytics for adsitco.com.</p>
-        <label class="gate__label" for="gate-input">Password</label>
-        <input
-          class="gate__input"
-          id="gate-input"
-          type="password"
-          autocomplete="current-password"
-          required
-        />
-        <p class="gate__error" id="gate-error" role="alert" hidden></p>
-        <button class="btn btn--primary" type="submit">View report</button>
+        <div class="gate__brand">
+          <img
+            class="gate__logo"
+            src="/adsitco-redesign-light-resize.png"
+            width="160"
+            height="53"
+            alt="Adsitco"
+          />
+        </div>
+        <div class="gate__body">
+          <h1 class="gate__title">Report access</h1>
+          <p class="gate__hint">This report contains private analytics for adsitco.com.</p>
+          <label class="gate__label" for="gate-input">Password</label>
+          <input
+            class="gate__input"
+            id="gate-input"
+            type="password"
+            autocomplete="current-password"
+            required
+          />
+          <p class="gate__error" id="gate-error" role="alert" hidden></p>
+          <button class="btn btn--primary" type="submit">View report</button>
+        </div>
       </form>
     </div>
 

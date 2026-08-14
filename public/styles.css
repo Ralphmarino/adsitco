@@ -121,24 +121,29 @@ body {
   border: 1px solid var(--border);
   border-top: 4px solid var(--brand-orange);
   border-radius: var(--radius);
-  padding: 0 28px 28px;
-  display: grid;
-  gap: 10px;
+  /* The charcoal band is a full-bleed child, so the card carries no padding of
+     its own and clips the band to its rounded corners. */
+  overflow: hidden;
 }
 
-/* The supplied mark is white, so it needs the charcoal band behind it — the
-   same pairing the masthead uses. */
+/* The supplied mark is white and needs the charcoal ground behind it, the same
+   pairing the masthead uses. A plain block does the bleeding — an image with
+   negative margins and its own padding overshot the card edge. */
+.gate__brand {
+  background: var(--brand-charcoal);
+  padding: 16px 24px;
+}
+
 .gate__logo {
   height: 30px;
   width: auto;
-  justify-self: start;
-  margin: 0 -28px 6px;
-  padding: 16px 28px;
-  box-sizing: content-box;
-  background: var(--brand-charcoal);
-  width: calc(100% + 56px);
-  object-fit: contain;
-  object-position: left center;
+  display: block;
+}
+
+.gate__body {
+  display: grid;
+  gap: 10px;
+  padding: 22px 24px 24px;
 }
 
 .gate__title {
