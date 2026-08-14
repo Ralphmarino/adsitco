@@ -70,12 +70,12 @@ export async function collectSnapshot({ days = 28, filters = {} } = {}) {
   const ga4HistoryStart = shiftDays(ga4Window.end, -(history * 2 - 1));
   const gscHistoryStart = shiftDays(gscWindow.end, -(history * 2 - 1));
 
-  const warnings = [];
+  const failures = [];
   const guard = async (label, fn, fallback) => {
     try {
       return await fn();
     } catch (err) {
-      warnings.push(`${label}: ${err.message}`);
+      failures.push({ label, message: err.message });
       return fallback;
     }
   };
@@ -108,6 +108,16 @@ export async function collectSnapshot({ days = 28, filters = {} } = {}) {
       devices: [],
     }),
   ]);
+
+  // One misconfigured variable breaks four fetches, which would otherwise print
+  // the same sentence four times. Group by cause and name what each one broke.
+  const warnings = [...new Set(failures.map((f) => f.message))].map((message) => {
+    const affected = failures.filter((f) => f.message === message).map((f) => f.label);
+    const hint = message.includes("Missing required environment variable")
+      ? " Set it in Netlify → Environment variables (all scopes), then redeploy."
+      : "";
+    return `${message} — affects ${affected.join(", ")}.${hint}`;
+  });
 
   return {
     generatedAt: new Date().toISOString(),
