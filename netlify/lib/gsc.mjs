@@ -1,4 +1,5 @@
 import { googleFetch, requireEnv } from "./google-auth.mjs";
+import { countryName } from "./countries.mjs";
 
 const SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"];
 
@@ -28,15 +29,20 @@ function shapeRow(row, dimensionNames) {
 }
 
 /**
- * Search Console's own filter syntax. Only device carries over from the report's
- * filter bar — Search Console has no notion of a GA4 channel group, so a channel
- * selection deliberately does not reach here, and the UI says so rather than
- * silently returning unfiltered search numbers under a filtered heading.
+ * Search Console's own filter syntax. Device and country carry over from the
+ * report's filter bar; channel does not, because Search Console has no notion of
+ * a GA4 channel group. That gap is stated in the UI rather than left to look
+ * like filtered search numbers.
  */
 function filterGroups(filters = {}) {
   const list = [];
   if (filters.device) {
     list.push({ dimension: "device", operator: "equals", expression: filters.device.toUpperCase() });
+  }
+  if (filters.country) {
+    // Search Console speaks ISO alpha-3, which is the canonical form the report
+    // stores the filter in, so it passes straight through.
+    list.push({ dimension: "country", operator: "equals", expression: filters.country });
   }
   if (!list.length) return undefined;
   return [{ filters: list }];
@@ -103,7 +109,13 @@ export async function collectGscBreakdowns({ start, end, filters }) {
   return {
     queries: clean(queries, "query"),
     pages: clean(pages, "page"),
-    countries: clean(countries, "country"),
+    // Search Console reports countries as alpha-3 codes; the table reads far
+    // better as names, and the code is kept for anyone reconciling with the API.
+    countries: clean(countries, "country").map((row) => ({
+      ...row,
+      code: row.name,
+      name: countryName(row.name),
+    })),
     devices: clean(devices, "device"),
   };
 }

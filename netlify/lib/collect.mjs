@@ -1,4 +1,5 @@
 import { daysAgo, shiftDays, shiftYears, daysBetween, isIsoDate } from "./dates.mjs";
+import { lookupCountry, countryOptions, DEFAULT_COUNTRY } from "./countries.mjs";
 import { fetchGa4Daily, collectGa4Breakdowns } from "./ga4.mjs";
 import { fetchGscDaily, collectGscBreakdowns } from "./gsc.mjs";
 
@@ -26,12 +27,34 @@ export const DEVICE_VALUES = ["desktop", "mobile", "tablet"];
 export function normaliseFilters(params) {
   const device = String(params?.device || "").toLowerCase();
   const channel = String(params?.channel || "").trim();
+
+  // Country is three-state, so the absence of a parameter can mean "apply the
+  // default" while still allowing an explicit "all". Without the sentinel there
+  // would be no way to ask for every country once a default exists.
+  const requested = String(params?.country ?? "").trim().toLowerCase();
+  let country = "";
+  if (requested === "all") country = "";
+  else if (requested) country = lookupCountry(requested)?.alpha3 ?? "";
+  else country = defaultCountry();
+
   return {
     device: DEVICE_VALUES.includes(device) ? device : "",
     // Channel names come from GA4's own list, so the only guard needed is a
     // length cap to keep the cache key bounded.
     channel: channel.length > 0 && channel.length <= 60 ? channel : "",
+    country,
   };
+}
+
+/**
+ * The country applied when the request does not name one. Most of this site's
+ * traffic is domestic, so reporting worldwide by default buries the market that
+ * matters. Set REPORT_DEFAULT_COUNTRY to "all" to report worldwide instead.
+ */
+export function defaultCountry() {
+  const configured = String(process.env.REPORT_DEFAULT_COUNTRY ?? DEFAULT_COUNTRY).trim().toLowerCase();
+  if (configured === "all") return "";
+  return lookupCountry(configured)?.alpha3 ?? DEFAULT_COUNTRY;
 }
 
 /**
@@ -51,6 +74,7 @@ export function filterSignature(filters) {
   const parts = [];
   if (filters.device) parts.push(`d:${filters.device}`);
   if (filters.channel) parts.push(`c:${filters.channel.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+  if (filters.country) parts.push(`g:${filters.country}`);
   return parts.length ? parts.join("_") : "all";
 }
 
@@ -190,10 +214,15 @@ export async function collectSnapshot({ days = 28, range, filters = {} } = {}) {
     currency: process.env.REPORT_CURRENCY || "USD",
     historyDays: historyDays(),
     filters: active,
+    countryOptions: countryOptions(),
     // Search Console has no channel dimension, so a channel selection narrows
     // the analytics panels only. The report says so instead of implying the
     // search numbers were filtered too.
-    filtersAppliedToSearch: { device: Boolean(active.device), channel: false },
+    filtersAppliedToSearch: {
+      device: Boolean(active.device),
+      country: Boolean(active.country),
+      channel: false,
+    },
     window: {
       days: resolved.days,
       mode: resolved.mode,

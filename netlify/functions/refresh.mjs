@@ -2,6 +2,7 @@ import {
   collectSnapshot,
   resolveRange,
   rangeSignature,
+  filterSignature,
   SUPPORTED_WINDOWS,
   hasUsableData,
 } from "../lib/collect.mjs";
@@ -28,13 +29,19 @@ export default async () => {
       // Same rule as the read path: never overwrite good cached data with an
       // empty result from a run that could not reach Google.
       const usable = hasUsableData(snapshot);
+      // Key by the filters the snapshot actually carries, not a hardcoded
+      // "all": collectSnapshot applies the default country, so storing it
+      // unfiltered would file a US-only snapshot under the worldwide key and
+      // leave the default view a permanent cache miss.
+      const signature = filterSignature(snapshot.filters);
       const persisted = usable
-        ? await writeSnapshot(rangeSignature(resolveRange({ days })), snapshot, "all")
+        ? await writeSnapshot(rangeSignature(resolveRange({ days })), snapshot, signature)
         : false;
       results.push({
         days,
         ok: usable,
         persisted,
+        filters: signature,
         skipped: usable ? undefined : "no data returned — cache left untouched",
         ga4Rows: snapshot.ga4.daily.length,
         gscRows: snapshot.gsc.daily.length,

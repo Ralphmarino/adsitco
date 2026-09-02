@@ -195,16 +195,28 @@ a row of `$0` tiles in a client presentation reads as a broken report.
 **Search Console** — clicks, impressions, average CTR, average position. Each
 plotted over time, plus top queries and top landing pages.
 
-**Filters** — device and channel, applied by Google's APIs rather than after the
-fact, so a filtered view recomputes every number: totals, trends and tables
-alike. Each filter combination is cached separately, so the second visit to a
+**Filters** — country, device and channel, applied by Google's APIs rather than
+after the fact, so a filtered view recomputes every number: totals, trends and
+tables alike. Each combination is cached separately, so the second visit to a
 given view is instant. The query and landing-page tables also have a text search
 that filters the loaded rows with no round trip.
 
+**The report opens filtered to the United States.** Change the default with
+`REPORT_DEFAULT_COUNTRY` (an ISO alpha-3 code, or `all` for worldwide); viewers
+can switch country freely regardless. The nightly job pre-warms whatever the
+default is, so the view people actually open is the one that stays warm.
+
+The two APIs disagree on how to name a country — GA4 reports display names and
+alpha-2 `countryId`, Search Console uses alpha-3 — so `netlify/lib/countries.mjs`
+maps between them and the filter reaches both sources. It covers the ~88 markets
+a site realistically sees rather than all ~250 ISO entries; an unmapped country
+is left out of the list on purpose, since including it would filter one source
+and silently not the other.
+
 One honest limitation, stated in the UI rather than hidden: **Search Console has
 no channel dimension**, so a channel selection narrows the Analytics panels only.
-When one is active, the filter bar says the search panels ignore it. Device
-filtering applies to both sources.
+When one is active, the filter bar says the search panels ignore it. Country and
+device filtering apply to both sources.
 
 **Date range** — 7 / 28 / 90 day presets, or **Custom** for any start and end
 you type. Custom ranges are capped at 365 days, because the daily history has to

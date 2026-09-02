@@ -10,7 +10,9 @@ const state = {
   // "period" | "year" | "none"
   comparison: "period",
   demo: new URLSearchParams(location.search).get("demo") === "1",
-  filters: { device: "", channel: "" },
+  // country is null until the first response: the server owns the default, and
+  // the page adopts whatever it reports rather than duplicating that decision.
+  filters: { device: "", channel: "", country: null },
   // Captured from the first unfiltered load so the dropdown still lists every
   // channel after one of them narrows the response.
   channelOptions: [],
@@ -286,6 +288,10 @@ function reportUrl(days = state.days, filters = state.filters) {
   }
   if (filters.device) params.set("device", filters.device);
   if (filters.channel) params.set("channel", filters.channel);
+  // null means "first load, let the server apply its default"; empty string is
+  // an explicit worldwide request and has to be sent as the sentinel.
+  if (filters.country === "") params.set("country", "all");
+  else if (filters.country) params.set("country", filters.country);
   return `/api/report?${params}`;
 }
 
@@ -360,7 +366,28 @@ function setNotice(message) {
 }
 
 function syncFilterUI(snapshot) {
-  const noFilters = !state.filters.device && !state.filters.channel;
+  // Adopt the server's country decision on first load, so the control always
+  // shows what was actually queried.
+  if (state.filters.country === null) {
+    state.filters.country = snapshot.filters?.country ?? "";
+  }
+
+  const countrySelect = document.getElementById("filter-country");
+  const countryList = snapshot.countryOptions || [];
+  if (countryList.length && countrySelect.dataset.filled !== String(countryList.length)) {
+    countrySelect.innerHTML = ['<option value="all">All countries</option>']
+      .concat(
+        countryList.map((c) => {
+          const safe = c.name.replace(/[<>&"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+          return `<option value="${c.value}">${safe}</option>`;
+        }),
+      )
+      .join("");
+    countrySelect.dataset.filled = String(countryList.length);
+  }
+  countrySelect.value = state.filters.country || "all";
+
+  const noFilters = !state.filters.device && !state.filters.channel && !state.filters.country;
   const fromApi = snapshot.ga4?.channelOptions || [];
   if (fromApi.length) state.channelOptions = fromApi;
   else if (noFilters) state.channelOptions = (snapshot.ga4?.channels || []).map((c) => c.name);
@@ -383,19 +410,24 @@ function syncFilterUI(snapshot) {
   // disabled and say why.
   if (state.demo) {
     select.disabled = true;
+    countrySelect.disabled = true;
     document.getElementById("filter-device").disabled = true;
     document.getElementById("filter-clear").hidden = true;
     status.textContent = "Filters need live data — they are disabled in sample mode.";
     return;
   }
   select.disabled = false;
+  countrySelect.disabled = false;
   document.getElementById("filter-device").disabled = false;
 
   if (noFilters) {
     status.textContent = "";
     return;
   }
+  const countryName =
+    countryList.find((c) => c.value === state.filters.country)?.name || state.filters.country;
   const applied = [
+    state.filters.country && countryName,
     state.filters.device && `${state.filters.device} only`,
     state.filters.channel && `${state.filters.channel} only`,
   ].filter(Boolean);
@@ -981,9 +1013,12 @@ document.getElementById("comparison").addEventListener("change", (event) => {
 for (const [id, key] of [
   ["filter-device", "device"],
   ["filter-channel", "channel"],
+  ["filter-country", "country"],
 ]) {
   document.getElementById(id).addEventListener("change", (event) => {
-    state.filters[key] = event.target.value;
+    // "all" is the country control's way of saying no filter; the other two use
+    // an empty option for that.
+    state.filters[key] = event.target.value === "all" ? "" : event.target.value;
     // Filters are applied by Google's APIs, so a change means a refetch. The
     // result is cached per combination, making the second visit instant.
     refresh();
@@ -991,7 +1026,7 @@ for (const [id, key] of [
 }
 
 document.getElementById("filter-clear").addEventListener("click", () => {
-  state.filters = { device: "", channel: "" };
+  state.filters = { device: "", channel: "", country: "" };
   refresh();
 });
 

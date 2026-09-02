@@ -1,5 +1,6 @@
 import { googleFetch, requireEnv } from "./google-auth.mjs";
 import { fromCompactDate } from "./dates.mjs";
+import { lookupCountry } from "./countries.mjs";
 
 const SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"];
 
@@ -96,6 +97,16 @@ function dimensionFilter(filters = {}) {
         stringFilter: { value: filters.channel, matchType: "EXACT" },
       },
     });
+  }
+  if (filters.country) {
+    // countryId is the ISO alpha-2 code, so the filter does not depend on the
+    // property's reporting language the way the display name would.
+    const alpha2 = lookupCountry(filters.country)?.alpha2;
+    if (alpha2) {
+      expressions.push({
+        filter: { fieldName: "countryId", stringFilter: { value: alpha2, matchType: "EXACT" } },
+      });
+    }
   }
   if (!expressions.length) return undefined;
   return { andGroup: { expressions } };
