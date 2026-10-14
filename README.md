@@ -362,30 +362,45 @@ dates, `"$4,820.50"`, parenthesised negatives, CRLF and a BOM are all handled.
 
 ### What it shows
 
-Total sales as the headline, then orders, average order value, inbound phone
-calls and the share of those calls that became an order, plus revenue per
+**The Sales tab works in months, not days.** The workbook is kept a month per
+tab, a sales review is asked a month at a time, and the analytics tab's rolling
+28-day window straddles month boundaries — which is how the default view ended
+up mixing a complete September with an empty half of October. So this tab has
+its own control: a first and last month, with quick picks for the last month,
+three months, twelve months and year to date. It opens on the **last twelve
+complete months**.
+
+The day-range control and the country, device and channel filters are hidden
+here rather than left inert: neither reaches this data.
+
+The comparison control is shared. On this tab "previous period" means the same
+number of months immediately before, and "previous year" the same months a year
+earlier.
+
+Total sales leads, then orders, average order value, inbound phone calls, the
+share of those calls that became an order, the monthly average, and revenue per
 channel. Then:
 
-- **Sales over time** — daily revenue, with the comparison period behind it.
-- **Monthly revenue, this year vs last** — thirteen complete months, each beside
-  the same month a year earlier. This one is deliberately independent of the
-  date range: the workbook holds three years, and "is the business growing" is a
-  question a 28-day line cannot answer. The panel says so.
-- **Each channel over time** — one small chart per channel rather than three
-  lines sharing an axis. Call revenue runs an order of magnitude above Web and
-  eBay, so on a shared axis the two smaller channels flatten into the baseline.
+- **Revenue over time** — monthly columns for a span of three months or more,
+  daily lines for one or two. A quarter read day by day is noise; a single month
+  read month by month is a single column.
+- **Each channel over time** — one small chart per channel on the same
+  granularity. Call revenue runs an order of magnitude above Web and eBay, so on
+  a shared axis the two smaller channels flatten into the baseline.
 - **Revenue by channel** with each one's share.
 
-Only complete months appear in the monthly view; a part-finished current month
-would read as a slump rather than a month still in progress.
+Only complete months are selectable. A month still in progress would read as a
+slump rather than as a month that has not finished, and the tab says when the
+workbook stops.
 
-**The date range and comparison controls drive this tab too**, so 90 days or
-year-over-year moves sales and analytics together. The country, device and
-channel filters do not — the workbook carries no such dimensions — so those
-controls are hidden on this tab rather than sitting there inert.
+### How it loads
 
-If the selected range runs past the last date with data, the tab says so.
-Otherwise the missing days would be drawn as zero and read as collapsing sales.
+Sales comes from `/api/sales`, separate from the analytics report and fetched
+once the first time the tab is opened. It is local data with no API quota, so
+the whole history ships at once and every change of month, span or comparison
+after that is instant — no round trip. Keeping it out of the analytics snapshot
+also keeps three years of sales from being copied into every cached range and
+filter combination.
 
 ## Branding
 

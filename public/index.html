@@ -106,6 +106,24 @@
           </div>
         </div>
 
+        <!-- Shown only on the Sales tab. The workbook is kept by month and a
+             sales review is asked by month, so this tab picks months rather
+             than inheriting the analytics tab's rolling day window. -->
+        <div class="field field--range" id="sales-months" hidden>
+          <span class="field__label">Months</span>
+          <div class="field__row">
+            <input class="field__control" id="sales-from" type="month" aria-label="First month" />
+            <span class="field__sep">to</span>
+            <input class="field__control" id="sales-to" type="month" aria-label="Last month" />
+            <span class="chipset" role="group" aria-label="Quick month ranges">
+              <button class="chip" type="button" data-months="1">Last month</button>
+              <button class="chip" type="button" data-months="3">3 mo</button>
+              <button class="chip" type="button" data-months="12">12 mo</button>
+              <button class="chip" type="button" data-ytd="1">YTD</button>
+            </span>
+          </div>
+        </div>
+
         <label class="field">
           <span class="field__label">Compare to</span>
           <select class="field__control" id="comparison">
@@ -375,7 +393,7 @@
         <section class="panel" aria-labelledby="sales-trend-heading">
           <div class="panel__head">
             <div>
-              <h2 class="panel__title" id="sales-trend-heading">Sales over time</h2>
+              <h2 class="panel__title" id="sales-trend-heading">Revenue over time</h2>
               <p class="panel__sub" id="sales-trend-sub"></p>
             </div>
             <button class="btn btn--ghost" type="button" data-table-toggle="sales-trend-chart">
@@ -384,23 +402,6 @@
           </div>
           <div class="chart" id="sales-trend-chart"></div>
           <div class="table-view" id="sales-trend-chart-table" hidden></div>
-        </section>
-
-        <section class="panel" aria-labelledby="sales-monthly-heading">
-          <div class="panel__head">
-            <div>
-              <h2 class="panel__title" id="sales-monthly-heading">Monthly revenue, this year vs last</h2>
-              <p class="panel__sub">
-                The last 13 complete months. This panel always shows the same window —
-                the date range above does not change it.
-              </p>
-            </div>
-            <button class="btn btn--ghost" type="button" data-table-toggle="sales-monthly-chart">
-              Table
-            </button>
-          </div>
-          <div class="chart" id="sales-monthly-chart"></div>
-          <div class="table-view" id="sales-monthly-chart-table" hidden></div>
         </section>
 
         <section aria-labelledby="sales-perchannel-heading">

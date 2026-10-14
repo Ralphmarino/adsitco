@@ -466,6 +466,29 @@ body {
   min-width: 0;
 }
 
+.chipset {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.chip:hover {
+  background: var(--wash);
+  color: var(--text-primary);
+  border-color: var(--axis);
+}
+
 .btn--compact {
   padding: 6px 12px;
 }

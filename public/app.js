@@ -3,6 +3,9 @@ import { timeSeriesChart, columnChart, barChart, renderTable, labelCell } from "
 const SUPPORTED_WINDOWS = [7, 28, 90];
 const PASSWORD_KEY = "adsitco-report-password";
 
+/** The Sales tab's own selection; the analytics range does not apply to it. */
+const salesState = { from: null, to: null, data: null, loading: null };
+
 const state = {
   days: 28,
   // null for a preset window; {start, end} for a custom one.
@@ -365,6 +368,11 @@ function setNotice(message) {
   notice.textContent = message;
 }
 
+/** Whether any dimension filter is narrowing the analytics tab. */
+function hasDimensionFilters() {
+  return Boolean(state.filters.device || state.filters.channel || state.filters.country);
+}
+
 function syncFilterUI(snapshot) {
   // Adopt the server's country decision on first load, so the control always
   // shows what was actually queried.
@@ -387,7 +395,7 @@ function syncFilterUI(snapshot) {
   }
   countrySelect.value = state.filters.country || "all";
 
-  const noFilters = !state.filters.device && !state.filters.channel && !state.filters.country;
+  const noFilters = !hasDimensionFilters();
   const fromApi = snapshot.ga4?.channelOptions || [];
   if (fromApi.length) state.channelOptions = fromApi;
   else if (noFilters) state.channelOptions = (snapshot.ga4?.channels || []).map((c) => c.name);
@@ -409,7 +417,7 @@ function syncFilterUI(snapshot) {
   ].join("");
   select.value = state.filters.channel || "";
   document.getElementById("filter-device").value = state.filters.device;
-  document.getElementById("filter-clear").hidden = noFilters;
+  document.getElementById("filter-clear").hidden = noFilters || !document.getElementById("tab-sales").hidden;
 
   const status = document.getElementById("filter-status");
 
@@ -454,51 +462,152 @@ function syncFilterUI(snapshot) {
 const surfaceColor = (name) =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-/**
- * The Sales tab. Driven by data/sales.csv rather than an API, but sliced with
- * the same window and comparison basis as everything else, so switching range
- * or basis moves all three datasets together.
+/* Sales tab ---------------------------------------------------------------
  *
- * The country, device and channel filters do not reach it — the CSV carries no
- * such dimensions — which the tab states rather than leaving the numbers
- * looking inconsistent with the Analytics tab beside them.
+ * Sales works in months, not the analytics tab's rolling day window. The
+ * workbook is kept a month per tab, a sales review is asked a month at a time,
+ * and a 28-day window straddles month boundaries — which is how the default
+ * view ended up mixing a complete September with an empty half of October.
+ *
+ * The data arrives from /api/sales once and every month, span and comparison
+ * after that is computed here, so changing any of them is instant.
  */
-function renderSales(snapshot, range, basis, cash) {
-  const sales = snapshot.sales;
-  const empty = document.getElementById("sales-empty");
-  const hasRows = Boolean(sales?.present && sales.daily?.length);
 
-  const panels = ["sales-tiles", "sales-trend-chart", "sales-channel-chart", "sales-breakdown-table"];
-  if (!hasRows) {
+const monthKey = (iso) => iso.slice(0, 7);
+
+function addMonths(key, n) {
+  const [y, m] = key.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 + n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthsBetween(from, to) {
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  return (ty - fy) * 12 + (tm - fm) + 1;
+}
+
+function monthLabel(key, short = false) {
+  const d = new Date(`${key}-01T00:00:00Z`);
+  return d.toLocaleDateString(undefined, {
+    month: short ? "short" : "long",
+    year: short ? "2-digit" : "numeric",
+    timeZone: "UTC",
+  });
+}
+
+/** Months the data actually covers, newest last, complete months only. */
+function completeMonths(sales) {
+  if (!sales?.coverage?.end) return [];
+  const months = [...new Set(sales.daily.map((r) => monthKey(r.date)))].sort();
+  return months.filter((key) => {
+    const [y, m] = key.split("-").map(Number);
+    const lastDay = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+    return sales.coverage.end >= lastDay;
+  });
+}
+
+function monthRange() {
+  const { from, to } = salesState;
+  if (!from || !to) return null;
+  return from <= to ? { from, to } : { from: to, to: from };
+}
+
+/** The months a comparison points at: the same count, shifted. */
+function comparisonMonths(range, basis) {
+  if (!range || basis === "none") return null;
+  const span = monthsBetween(range.from, range.to);
+  if (basis === "year") return { from: addMonths(range.from, -12), to: addMonths(range.to, -12) };
+  return { from: addMonths(range.from, -span), to: addMonths(range.to, -span) };
+}
+
+/** Daily rows folded into one row per month, same flat keys. */
+function foldToMonths(daily, channels) {
+  const byMonth = new Map();
+  for (const row of daily) {
+    const key = monthKey(row.date);
+    let month = byMonth.get(key);
+    if (!month) {
+      month = { key, date: `${key}-01`, revenue: 0, orders: 0, calls: 0 };
+      for (const c of channels) {
+        month[`rev_${c.id}`] = 0;
+        month[`ord_${c.id}`] = 0;
+      }
+      byMonth.set(key, month);
+    }
+    month.revenue += row.revenue;
+    month.orders += row.orders;
+    month.calls += row.calls ?? 0;
+    for (const c of channels) {
+      month[`rev_${c.id}`] += row[`rev_${c.id}`] ?? 0;
+      month[`ord_${c.id}`] += row[`ord_${c.id}`] ?? 0;
+    }
+  }
+  return [...byMonth.values()].sort((a, b) => a.key.localeCompare(b.key));
+}
+
+const inMonths = (rows, range) =>
+  rows.filter((r) => monthKey(r.date) >= range.from && monthKey(r.date) <= range.to);
+
+function renderSales() {
+  const sales = salesState.data;
+  const empty = document.getElementById("sales-empty");
+  const panels = ["sales-tiles", "sales-trend-chart", "sales-perchannel", "sales-channel-chart", "sales-breakdown-table"];
+
+  if (!sales?.present || !sales.daily?.length) {
     empty.hidden = false;
     empty.textContent =
-      (sales?.warnings?.[0] ??
-        "No sales data yet.") + " Add data/sales.csv to the repository and redeploy — see the README for the column format.";
-    for (const id of panels) document.getElementById(id).replaceChildren();
+      (sales?.warnings?.[0] ?? "No sales data yet.") +
+      " Add the workbook to data/ in the repository and redeploy — see the README for the columns it reads.";
+    for (const id of panels) document.getElementById(id)?.replaceChildren();
     document.getElementById("sales-hero-value").textContent = "—";
     document.getElementById("sales-hero-delta").replaceChildren();
     document.getElementById("sales-hero-sub").textContent = "";
     return;
   }
 
-  const slice = sliceWindow(sales.daily, range, basis);
+  const range = monthRange();
+  if (!range) return;
+
+  const basis = state.comparison;
   const channels = sales.channels || [];
-  const total = (rows) => ({
+  const cash = currencyFormatters(sales.currency || "USD");
+  const comparison = comparisonMonths(range, basis);
+
+  const currentDays = inMonths(sales.daily, range);
+  const previousDays = comparison ? inMonths(sales.daily, comparison) : [];
+  const allMonths = foldToMonths(sales.daily, channels);
+  const currentMonths = allMonths.filter((m) => m.key >= range.from && m.key <= range.to);
+  const previousMonths = comparison
+    ? allMonths.filter((m) => m.key >= comparison.from && m.key <= comparison.to)
+    : [];
+
+  const totals = (rows) => ({
     revenue: sum(rows, "revenue"),
     orders: sum(rows, "orders"),
     calls: sum(rows, "calls"),
   });
-  const now = total(slice.current);
-  const before = total(slice.previous);
+  const now = totals(currentDays);
+  const before = totals(previousDays);
   const aov = (t) => (t.orders ? t.revenue / t.orders : NaN);
-  // A range reaching past what the file covers would otherwise draw the
-  // shortfall as a collapse to zero, which reads as lost sales.
-  const beyond = sales.coverage?.end && range.end > sales.coverage.end;
+
+  const span = monthsBetween(range.from, range.to);
+  const spanLabel = span === 1 ? monthLabel(range.from) : `${monthLabel(range.from)} – ${monthLabel(range.to)}`;
+  const comparisonLabel = comparison
+    ? monthsBetween(comparison.from, comparison.to) === 1
+      ? monthLabel(comparison.from)
+      : `${monthLabel(comparison.from)} – ${monthLabel(comparison.to)}`
+    : "";
+
+  // A selection reaching past what the workbook covers would otherwise draw
+  // the shortfall as a collapse to zero rather than as missing data.
+  const lastComplete = completeMonths(sales).at(-1);
+  const beyond = lastComplete && range.to > lastComplete;
   empty.hidden = !beyond;
   if (beyond) {
     empty.textContent =
-      `${sales.source ?? "The sales file"} covers ${prettyDate(sales.coverage.start)} to ${prettyDate(sales.coverage.end)}. ` +
-      `The selected range runs to ${prettyDate(range.end)}, so days after that count as zero.`;
+      `${sales.source ?? "The sales file"} is complete through ${monthLabel(lastComplete)} ` +
+      `(data to ${prettyDate(sales.coverage.end)}). Months after that are partial or empty.`;
   }
 
   document.getElementById("sales-hero-value").textContent = cash.money(now.revenue);
@@ -507,10 +616,16 @@ function renderSales(snapshot, range, basis, cash) {
   );
   document.getElementById("sales-hero-sub").textContent =
     basis === "none"
-      ? rangeLabel(slice.range)
-      : `${rangeLabel(slice.range)} · ${COMPARISON_LABEL[basis]} ${cash.money(before.revenue)} (${rangeLabel(slice.previousRange)})`;
+      ? spanLabel
+      : `${spanLabel} · ${COMPARISON_LABEL[basis]} ${cash.money(before.revenue)} (${comparisonLabel})`;
+  document.getElementById("sales-range").textContent = spanLabel;
 
-  document.getElementById("sales-range").textContent = rangeLabel(slice.range);
+  // The masthead describes whichever tab is open; the analytics day range
+  // means nothing here.
+  if (!document.getElementById("tab-sales").hidden) {
+    document.getElementById("range-meta").textContent =
+      `Sales · ${spanLabel}${basis === "none" ? "" : ` · vs ${COMPARISON_LABEL[basis]} ${comparisonLabel}`}`;
+  }
 
   const tiles = [];
   if (sales.hasOrders) {
@@ -526,78 +641,119 @@ function renderSales(snapshot, range, basis, cash) {
     );
   }
   if (sales.hasCalls) {
+    const rate = (t, rows) => (t.calls ? sum(rows, "ord_call") / t.calls : NaN);
     tiles.push(
       tile({ label: "Phone calls", value: compact(now.calls), current: now.calls, previous: before.calls }),
-      // Call volume and the orders those calls produced are separate columns in
-      // the export, so the rate between them is worth stating outright.
       tile({
         label: "Calls to order",
-        value: percent(now.calls ? sum(slice.current, "ord_call") / now.calls : NaN),
-        current: now.calls ? sum(slice.current, "ord_call") / now.calls : NaN,
-        previous: before.calls ? sum(slice.previous, "ord_call") / before.calls : NaN,
+        value: percent(rate(now, currentDays)),
+        current: rate(now, currentDays),
+        previous: rate(before, previousDays),
         deltaFormat: percent,
       }),
     );
   }
+  if (span > 1) {
+    tiles.push(
+      tile({
+        label: "Monthly average",
+        value: cash.money(now.revenue / span),
+        current: now.revenue / span,
+        previous: previousMonths.length ? before.revenue / previousMonths.length : NaN,
+        deltaFormat: cash.money,
+      }),
+    );
+  }
   for (const c of channels) {
-    const current = sum(slice.current, `rev_${c.id}`);
-    const previous = sum(slice.previous, `rev_${c.id}`);
     tiles.push(
       tile({
         label: `${c.label} revenue`,
-        value: cash.money(current),
-        current,
-        previous,
+        value: cash.money(sum(currentDays, `rev_${c.id}`)),
+        current: sum(currentDays, `rev_${c.id}`),
+        previous: sum(previousDays, `rev_${c.id}`),
         deltaFormat: cash.money,
       }),
     );
   }
   document.getElementById("sales-tiles").replaceChildren(...tiles);
 
-  const comparisonNote = basis === "none" ? "" : ` Compared with the ${COMPARISON_LABEL[basis]}.`;
-  document.getElementById("sales-trend-sub").textContent = `Daily revenue, all channels combined.${comparisonNote}`;
+  // One or two months is a shape you read day by day; a quarter or a year is
+  // one you read month by month, where daily noise only hides the trend.
+  const byMonth = span >= 3;
+  const note = basis === "none" ? "" : ` Compared with ${comparisonLabel}.`;
+  document.getElementById("sales-trend-heading").textContent = byMonth
+    ? "Revenue by month"
+    : "Revenue by day";
+  document.getElementById("sales-trend-sub").textContent =
+    `${byMonth ? "Monthly" : "Daily"} revenue, all channels combined.${note}`;
 
-  timeSeriesChart(document.getElementById("sales-trend-chart"), {
-    series: (() => {
-      const series = [
-        {
-          label: "Revenue",
-          color: surfaceColor("--series-3"),
-          points: slice.current.map((r) => ({ date: r.date, value: r.revenue })),
-        },
-      ];
-      if (slice.previous.length) {
-        series.push({
-          label: COMPARISON_LABEL[basis],
-          color: surfaceColor("--text-muted"),
-          endLabel: false,
-          points: slice.previous.map((r) => ({ date: r.date, value: r.revenue })),
-        });
-      }
-      return series;
-    })(),
-    format: cash.chart,
-  });
+  if (byMonth) {
+    const groups = currentMonths.map((m, i) => ({
+      label: monthLabel(m.key),
+      short: monthLabel(m.key, true),
+      values: { current: m.revenue, previous: previousMonths[i]?.revenue ?? 0 },
+      previousLabel: previousMonths[i] ? monthLabel(previousMonths[i].key) : null,
+    }));
+    const series = [{ key: "current", label: spanLabel, color: surfaceColor("--series-3") }];
+    if (previousMonths.length) {
+      series.push({ key: "previous", label: comparisonLabel, color: surfaceColor("--text-muted") });
+    }
+    columnChart(document.getElementById("sales-trend-chart"), { groups, series, format: cash.chart });
 
-  renderTable(document.getElementById("sales-trend-chart-table"), {
-    columns: [
-      { label: "Date", render: (r) => prettyDate(r.date) },
-      ...channels.map((c) => ({
-        label: c.label,
-        render: (r) => cash.money(r[`rev_${c.id}`] || 0),
-      })),
-      { label: "Total", render: (r) => cash.money(r.revenue) },
-    ],
-    rows: [...slice.current].reverse(),
-  });
+    renderTable(document.getElementById("sales-trend-chart-table"), {
+      columns: [
+        { label: "Month", render: (g) => g.label },
+        { label: "Revenue", render: (g) => cash.money(g.values.current) },
+        ...(previousMonths.length
+          ? [
+              { label: "Comparison", render: (g) => (g.previousLabel ? cash.money(g.values.previous) : "—") },
+              {
+                label: "Change",
+                render: (g) =>
+                  g.values.previous
+                    ? `${g.values.current >= g.values.previous ? "+" : ""}${(((g.values.current - g.values.previous) / g.values.previous) * 100).toFixed(1)}%`
+                    : "—",
+              },
+            ]
+          : []),
+      ],
+      rows: [...groups].reverse(),
+    });
+  } else {
+    const series = [
+      {
+        label: "Revenue",
+        color: surfaceColor("--series-3"),
+        points: currentDays.map((r) => ({ date: r.date, value: r.revenue })),
+      },
+    ];
+    if (previousDays.length) {
+      series.push({
+        label: comparisonLabel,
+        color: surfaceColor("--text-muted"),
+        endLabel: false,
+        points: previousDays.map((r) => ({ date: r.date, value: r.revenue })),
+      });
+    }
+    timeSeriesChart(document.getElementById("sales-trend-chart"), { series, format: cash.chart });
+
+    renderTable(document.getElementById("sales-trend-chart-table"), {
+      columns: [
+        { label: "Date", render: (r) => prettyDate(r.date) },
+        ...channels.map((c) => ({ label: c.label, render: (r) => cash.money(r[`rev_${c.id}`] || 0) })),
+        { label: "Total", render: (r) => cash.money(r.revenue) },
+      ],
+      rows: [...currentDays].reverse(),
+    });
+  }
+
+  renderSalesPerChannel({ sales, channels, currentMonths, previousMonths, currentDays, previousDays, byMonth, cash, spanLabel, comparisonLabel });
 
   const byChannel = channels
     .map((c) => ({
-      id: c.id,
       name: c.label,
-      revenue: sum(slice.current, `rev_${c.id}`),
-      orders: sum(slice.current, `ord_${c.id}`),
-      previous: sum(slice.previous, `rev_${c.id}`),
+      revenue: sum(currentDays, `rev_${c.id}`),
+      orders: sum(currentDays, `ord_${c.id}`),
     }))
     .sort((a, b) => b.revenue - a.revenue);
 
@@ -626,135 +782,68 @@ function renderSales(snapshot, range, basis, cash) {
       : []),
     { label: "Share", render: (r) => percent(now.revenue ? r.revenue / now.revenue : NaN) },
   ];
-
-  renderTable(document.getElementById("sales-channel-chart-table"), {
-    columns: channelColumns,
-    rows: byChannel,
-  });
-  renderTable(document.getElementById("sales-breakdown-table"), {
-    columns: channelColumns,
-    rows: byChannel,
-  });
-
+  renderTable(document.getElementById("sales-channel-chart-table"), { columns: channelColumns, rows: byChannel });
+  renderTable(document.getElementById("sales-breakdown-table"), { columns: channelColumns, rows: byChannel });
   document.getElementById("sales-breakdown-sub").textContent =
-    `${rangeLabel(slice.range)} · from ${sales.source ?? "the sales file"}. The country, device and channel filters do not apply here.`;
-
-  renderSalesMonthly(sales, cash);
-  renderSalesPerChannel(sales, slice, channels, basis, cash);
+    `${spanLabel} · from ${sales.source ?? "the sales file"}. The country, device and channel filters do not apply here.`;
 }
 
 /**
- * Thirteen complete months, this year against last.
- *
- * Deliberately independent of the date range: the workbook holds three years,
- * and the question this answers — is the business growing — is one a 28-day
- * line cannot show. The panel says so rather than quietly ignoring a control.
- */
-function renderSalesMonthly(sales, cash) {
-  const monthly = new Map();
-  for (const row of sales.daily) {
-    const key = row.date.slice(0, 7);
-    monthly.set(key, (monthly.get(key) ?? 0) + row.revenue);
-  }
-
-  // Complete months only: a part-finished current month would read as a slump.
-  const keys = [...monthly.keys()].sort().filter((k) => monthIsComplete(k, sales.coverage?.end));
-  const recent = keys.slice(-13);
-
-  const groups = recent.map((key) => {
-    const [y, m] = key.split("-");
-    const previousKey = `${Number(y) - 1}-${m}`;
-    const date = new Date(`${key}-01T00:00:00Z`);
-    return {
-      key,
-      label: date.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" }),
-      short: date.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" }),
-      values: { current: monthly.get(key) ?? 0, previous: monthly.get(previousKey) ?? 0 },
-    };
-  });
-
-  const hasPriorYear = groups.some((g) => g.values.previous > 0);
-  const series = [{ key: "current", label: "This year", color: surfaceColor("--series-3") }];
-  if (hasPriorYear) {
-    series.push({ key: "previous", label: "Same month last year", color: surfaceColor("--text-muted") });
-  }
-
-  columnChart(document.getElementById("sales-monthly-chart"), { groups, series, format: cash.chart });
-
-  renderTable(document.getElementById("sales-monthly-chart-table"), {
-    columns: [
-      { label: "Month", render: (g) => g.label },
-      { label: "Revenue", render: (g) => cash.money(g.values.current) },
-      ...(hasPriorYear
-        ? [
-            { label: "Year earlier", render: (g) => cash.money(g.values.previous) },
-            {
-              label: "Change",
-              render: (g) =>
-                g.values.previous
-                  ? `${g.values.current >= g.values.previous ? "+" : ""}${(((g.values.current - g.values.previous) / g.values.previous) * 100).toFixed(1)}%`
-                  : "—",
-            },
-          ]
-        : []),
-    ],
-    rows: [...groups].reverse(),
-  });
-}
-
-/** A month counts as complete once the data reaches its final day. */
-function monthIsComplete(key, coverageEnd) {
-  if (!coverageEnd) return false;
-  const [y, m] = key.split("-").map(Number);
-  const lastDay = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
-  return coverageEnd >= lastDay;
-}
-
-/**
- * One chart per channel rather than three lines on one axis. Call revenue runs
- * an order of magnitude above Web and eBay here, and on a shared axis the two
+ * One chart per channel rather than all of them on one axis. Call revenue runs
+ * an order of magnitude above Web and eBay, and on a shared axis the two
  * smaller channels flatten into the baseline and stop being readable.
  */
-function renderSalesPerChannel(sales, slice, channels, basis, cash) {
+function renderSalesPerChannel({ channels, currentMonths, previousMonths, currentDays, previousDays, byMonth, cash, spanLabel, comparisonLabel }) {
   const host = document.getElementById("sales-perchannel");
-  document.getElementById("sales-perchannel-range").textContent = rangeLabel(slice.range);
+  document.getElementById("sales-perchannel-range").textContent = spanLabel;
   host.replaceChildren();
 
   for (const channel of channels) {
     const panel = document.createElement("section");
     panel.className = "panel";
-
     const title = document.createElement("h3");
     title.className = "panel__title";
     title.textContent = channel.label;
-
     const sub = document.createElement("p");
     sub.className = "panel__sub";
-    sub.textContent = `${cash.money(sum(slice.current, `rev_${channel.id}`))} in this range`;
-
+    sub.textContent = `${cash.money(sum(currentDays, `rev_${channel.id}`))} in this range`;
     const chart = document.createElement("div");
     chart.className = "chart";
     panel.append(title, sub, chart);
-    host.appendChild(panel);
-
     // Appended before drawing: a chart measures its container, which has no
     // width until it is in the document.
-    const series = [
-      {
-        label: channel.label,
-        color: surfaceColor("--series-3"),
-        points: slice.current.map((r) => ({ date: r.date, value: r[`rev_${channel.id}`] || 0 })),
-      },
-    ];
-    if (slice.previous.length) {
-      series.push({
-        label: COMPARISON_LABEL[basis],
-        color: surfaceColor("--text-muted"),
-        endLabel: false,
-        points: slice.previous.map((r) => ({ date: r.date, value: r[`rev_${channel.id}`] || 0 })),
-      });
+    host.appendChild(panel);
+
+    const key = `rev_${channel.id}`;
+    if (byMonth) {
+      const groups = currentMonths.map((m, i) => ({
+        label: monthLabel(m.key),
+        short: monthLabel(m.key, true),
+        values: { current: m[key] || 0, previous: previousMonths[i]?.[key] ?? 0 },
+      }));
+      const series = [{ key: "current", label: spanLabel, color: surfaceColor("--series-3") }];
+      if (previousMonths.length) {
+        series.push({ key: "previous", label: comparisonLabel, color: surfaceColor("--text-muted") });
+      }
+      columnChart(chart, { groups, series, format: cash.chart });
+    } else {
+      const series = [
+        {
+          label: channel.label,
+          color: surfaceColor("--series-3"),
+          points: currentDays.map((r) => ({ date: r.date, value: r[key] || 0 })),
+        },
+      ];
+      if (previousDays.length) {
+        series.push({
+          label: comparisonLabel,
+          color: surfaceColor("--text-muted"),
+          endLabel: false,
+          points: previousDays.map((r) => ({ date: r.date, value: r[key] || 0 })),
+        });
+      }
+      timeSeriesChart(chart, { series, format: cash.chart });
     }
-    timeSeriesChart(chart, { series, format: cash.chart });
   }
 }
 
@@ -1201,7 +1290,7 @@ function render() {
   if (warnings.length && !snapshot.sample) showDiagnostics({ staleWarnings: true });
   else document.getElementById("diagnostics").hidden = true;
 
-  renderSales(snapshot, snapshot.window?.ga4, basis, cash);
+  if (salesState.data) renderSales();
 }
 
 /* Wiring ------------------------------------------------------------------- */
@@ -1397,6 +1486,84 @@ for (const [id, key] of [
   });
 }
 
+/**
+ * Sales data is fetched once, lazily, the first time the tab is opened. It is a
+ * separate endpoint from the report because it is local data on a different
+ * time grain, and pulling it on every analytics load would be waste.
+ */
+async function ensureSalesLoaded() {
+  if (salesState.data || salesState.loading) return salesState.loading;
+  const headers = {};
+  if (state.password) headers["x-report-password"] = state.password;
+  salesState.loading = fetch("/api/sales", { headers })
+    .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`sales request failed (${res.status})`))))
+    .then((data) => {
+      salesState.data = data;
+      const months = completeMonths(data);
+      if (months.length && !salesState.from) {
+        // Open on the last twelve complete months: enough to read a trend,
+        // and never a part-finished month that would look like a slump.
+        salesState.to = months.at(-1);
+        salesState.from = months.length >= 12 ? months.at(-12) : months[0];
+      }
+      return data;
+    })
+    .catch((err) => {
+      salesState.data = { present: false, daily: [], channels: [], warnings: [err.message] };
+      return salesState.data;
+    })
+    .finally(() => {
+      salesState.loading = null;
+    });
+  return salesState.loading;
+}
+
+function syncSalesControls() {
+  const from = document.getElementById("sales-from");
+  const to = document.getElementById("sales-to");
+  const months = completeMonths(salesState.data);
+  if (months.length) {
+    for (const input of [from, to]) {
+      input.min = months[0];
+      input.max = months.at(-1);
+    }
+  }
+  if (salesState.from) from.value = salesState.from;
+  if (salesState.to) to.value = salesState.to;
+}
+
+function applySalesMonths(from, to) {
+  salesState.from = from;
+  salesState.to = to;
+  syncSalesControls();
+  renderSales();
+}
+
+for (const id of ["sales-from", "sales-to"]) {
+  document.getElementById(id).addEventListener("change", () => {
+    const from = document.getElementById("sales-from").value;
+    const to = document.getElementById("sales-to").value;
+    if (!from || !to) return;
+    applySalesMonths(from <= to ? from : to, from <= to ? to : from);
+  });
+}
+
+for (const chip of document.querySelectorAll(".chip")) {
+  chip.addEventListener("click", () => {
+    const months = completeMonths(salesState.data);
+    if (!months.length) return;
+    const last = months.at(-1);
+    if (chip.dataset.ytd) {
+      const january = `${last.slice(0, 4)}-01`;
+      applySalesMonths(january < months[0] ? months[0] : january, last);
+      return;
+    }
+    const count = Number(chip.dataset.months);
+    const first = months.length >= count ? months.at(-count) : months[0];
+    applySalesMonths(first, last);
+  });
+}
+
 // Tabs. The range and comparison controls stay visible on both, because they
 // drive both datasets; the country, device and channel filters only reach the
 // Analytics tab, so they are hidden on Sales rather than appearing inert.
@@ -1409,15 +1576,31 @@ for (const button of document.querySelectorAll(".tabs__btn")) {
       if (active) other.setAttribute("aria-current", "page");
       else other.removeAttribute("aria-current");
     }
-    document.getElementById("tab-analytics").hidden = tab !== "analytics";
-    document.getElementById("tab-sales").hidden = tab !== "sales";
+    const sales = tab === "sales";
+    document.getElementById("tab-analytics").hidden = sales;
+    document.getElementById("tab-sales").hidden = !sales;
+
+    // Each tab keeps only the controls that reach its data: months and the
+    // comparison on Sales, the day range and dimension filters on Analytics.
     for (const id of ["filter-country", "filter-device", "filter-channel"]) {
-      document.getElementById(id).closest(".field").hidden = tab === "sales";
+      document.getElementById(id).closest(".field").hidden = sales;
     }
-    document.getElementById("filter-status").hidden = tab === "sales";
-    // Charts measure their container, which is zero-wide while hidden, so the
-    // newly shown tab has to draw after it becomes visible.
-    render();
+    document.getElementById("filter-status").hidden = sales;
+    document.getElementById("filter-clear").hidden = sales || !hasDimensionFilters();
+    document.getElementById("sales-months").hidden = !sales;
+    document.getElementById("custom-range").hidden = sales || !state.custom;
+    document.querySelector(".segmented").hidden = sales;
+
+    if (sales) {
+      ensureSalesLoaded().then(() => {
+        syncSalesControls();
+        // Charts measure their container, which has no width while hidden, so
+        // this has to draw after the tab is visible.
+        renderSales();
+      });
+    } else {
+      render();
+    }
   });
 }
 
