@@ -2,6 +2,7 @@ import { daysAgo, shiftDays, shiftYears, daysBetween, isIsoDate } from "./dates.
 import { lookupCountry, countryOptions, DEFAULT_COUNTRY } from "./countries.mjs";
 import { fetchGa4Daily, collectGa4Breakdowns } from "./ga4.mjs";
 import { fetchGscDaily, collectGscBreakdowns } from "./gsc.mjs";
+import { collectSales } from "./sales.mjs";
 
 // GA4 is complete through yesterday. Search Console publishes two to three days
 // behind, so each source is anchored to its own last complete day instead of a
@@ -231,6 +232,9 @@ export async function collectSnapshot({ days = 28, range, filters = {} } = {}) {
     },
     ga4: { daily: ga4Daily, ...ga4Breakdowns },
     gsc: { daily: gscDaily, ...gscBreakdowns },
+    // Local CSV rather than an API, so it cannot fail the way the others can
+    // and needs no guard — it either has rows or it does not.
+    sales: collectSales({ start: ga4HistoryStart, end: ga4Window.end }),
     warnings,
   };
 }

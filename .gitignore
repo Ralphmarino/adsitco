@@ -1,5 +1,7 @@
 node_modules/
 .netlify/
+# Build artifact: generated from data/sales.csv by scripts/build-sales.mjs.
+netlify/lib/sales-data.mjs
 .env
 .env.*
 !.env.example

@@ -1,6 +1,9 @@
 [build]
   publish = "public"
-  command = "echo 'static site — nothing to build'"
+  # Converts data/sales.csv into a module the functions import. Reading it at
+  # build time keeps the file out of public/, where it would be served to
+  # anyone with the URL and bypass the report's password gate.
+  command = "node scripts/build-sales.mjs"
 
 [functions]
   directory = "netlify/functions"

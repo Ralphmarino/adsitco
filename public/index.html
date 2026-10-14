@@ -88,6 +88,13 @@
         </div>
       </header>
 
+      <nav class="tabs" id="tabs" aria-label="Report sections">
+        <button class="tabs__btn is-active" type="button" data-tab="analytics" aria-current="page">
+          Search &amp; analytics
+        </button>
+        <button class="tabs__btn" type="button" data-tab="sales">Sales</button>
+      </nav>
+
       <div class="filterbar">
         <div class="field field--range" id="custom-range" hidden>
           <span class="field__label">Custom range</span>
@@ -146,7 +153,7 @@
         <ul class="diagnostics__list" id="diagnostics-list"></ul>
       </section>
 
-      <main class="page">
+      <main class="page" id="tab-analytics">
         <!-- Headline ------------------------------------------------------ -->
         <section class="panel panel--hero" aria-labelledby="hero-heading">
           <h2 class="panel__title" id="hero-heading">Sessions</h2>
@@ -330,6 +337,60 @@
             <h2 class="panel__title" id="devices-heading">Devices</h2>
             <p class="panel__sub" id="devices-sub"></p>
             <div class="table-view" id="devices-table"></div>
+          </section>
+        </div>
+      </main>
+
+      <main class="page" id="tab-sales" hidden>
+        <p class="notice notice--inline" id="sales-empty" hidden></p>
+
+        <section class="panel panel--hero" aria-labelledby="sales-hero-heading">
+          <h2 class="panel__title" id="sales-hero-heading">Total sales</h2>
+          <p class="hero__value" id="sales-hero-value">—</p>
+          <p class="hero__delta" id="sales-hero-delta"></p>
+          <p class="hero__sub" id="sales-hero-sub"></p>
+        </section>
+
+        <section aria-labelledby="sales-tiles-heading">
+          <h2 class="section__title" id="sales-tiles-heading">
+            By channel <span class="section__range" id="sales-range"></span>
+          </h2>
+          <div class="tiles" id="sales-tiles"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="sales-trend-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="sales-trend-heading">Sales over time</h2>
+              <p class="panel__sub" id="sales-trend-sub"></p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="sales-trend-chart">
+              Table
+            </button>
+          </div>
+          <div class="chart" id="sales-trend-chart"></div>
+          <div class="table-view" id="sales-trend-chart-table" hidden></div>
+        </section>
+
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="sales-channel-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="sales-channel-heading">Revenue by channel</h2>
+                <p class="panel__sub">Share of total sales in the selected range.</p>
+              </div>
+              <button class="btn btn--ghost" type="button" data-table-toggle="sales-channel-chart">
+                Table
+              </button>
+            </div>
+            <div class="chart" id="sales-channel-chart"></div>
+            <div class="table-view" id="sales-channel-chart-table" hidden></div>
+          </section>
+
+          <section class="panel" aria-labelledby="sales-breakdown-heading">
+            <h2 class="panel__title" id="sales-breakdown-heading">Channel detail</h2>
+            <p class="panel__sub" id="sales-breakdown-sub"></p>
+            <div class="table-view" id="sales-breakdown-table"></div>
           </section>
         </div>
       </main>

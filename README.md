@@ -291,6 +291,69 @@ Nothing in it comes from Google Analytics or Search Console. Those require the
 service account; once it is configured the report reads them live and this file
 is no longer used. Regenerate with `node scripts/make-sample-data.mjs`.
 
+## Sales tab
+
+The report has two tabs: **Search & analytics** (GA4 + Search Console) and
+**Sales**, which reads `data/sales.csv` from this repository.
+
+### Where the file goes
+
+`data/sales.csv` — the repository root, **not `public/`**. Anything under
+`public/` is served to anyone with the URL and would bypass the password gate,
+and sales figures should sit behind the same gate as everything else. The build
+step turns the CSV into a module the functions import, so the file itself is
+never served.
+
+### Format
+
+One row per date and channel:
+
+```csv
+date,channel,orders,revenue
+2026-09-01,web,18,4820.50
+2026-09-01,call,7,3140.00
+2026-09-01,ebay,4,610.25
+```
+
+`data/sales.example.csv` is a copy you can start from. The parser is deliberately
+forgiving of what a real export looks like:
+
+| | Accepted |
+| --- | --- |
+| Column names | `date` / `order date` / `day`; `channel` / `source` / `sales channel`; `orders` / `order count` / `transactions`; `revenue` / `sales` / `amount` / `net sales` |
+| Dates | `2026-09-01` or `9/1/2026` |
+| Money | `4820.50`, `$4,820.50`, `"$4,820.50"`, `(45.00)` for a negative |
+| Channels | web / website / online / ecommerce → **Web**; call / phone / call center → **Call**; ebay → **eBay** |
+
+Quoted fields, commas inside values, CRLF line endings and a UTF-8 BOM are all
+handled. A channel it does not recognise is kept under its own name rather than
+dropped — losing revenue silently is worse than showing an unplanned channel.
+Rows with an unreadable date or amount are skipped and counted in a warning
+shown on the tab.
+
+Order counts are optional. Without them the revenue figures still work; orders
+and average order value are hidden rather than shown as zero.
+
+### Updating it
+
+Commit a new `data/sales.csv` and push. Netlify rebuilds, the build step
+regenerates the module, and the tab updates — no environment variables, no API
+quota. Run `node scripts/build-sales.mjs` locally first to see the row count,
+date range and any warnings before pushing.
+
+### What it shows
+
+Total sales as the headline, then orders, average order value and revenue per
+channel; daily revenue over time; and revenue by channel with each one's share.
+
+**The date range and comparison controls drive this tab too**, so 90 days or
+year-over-year moves sales and analytics together. The country, device and
+channel filters do not — the CSV carries no such dimensions — so those controls
+are hidden on this tab rather than sitting there inert.
+
+If the selected range runs past the last date in the file, the tab says so.
+Otherwise the missing days would be drawn as zero and read as collapsing sales.
+
 ## Branding
 
 The report carries adsitco's chrome: the thin orange rule over a charcoal

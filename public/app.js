@@ -439,6 +439,182 @@ function syncFilterUI(snapshot) {
   status.textContent = `Filtered: ${applied.join(", ")}${caveat}`;
 }
 
+/** Read a CSS custom property; charts take their colours from the theme. */
+const surfaceColor = (name) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+/**
+ * The Sales tab. Driven by data/sales.csv rather than an API, but sliced with
+ * the same window and comparison basis as everything else, so switching range
+ * or basis moves all three datasets together.
+ *
+ * The country, device and channel filters do not reach it — the CSV carries no
+ * such dimensions — which the tab states rather than leaving the numbers
+ * looking inconsistent with the Analytics tab beside them.
+ */
+function renderSales(snapshot, range, basis, cash) {
+  const sales = snapshot.sales;
+  const empty = document.getElementById("sales-empty");
+  const hasRows = Boolean(sales?.present && sales.daily?.length);
+
+  const panels = ["sales-tiles", "sales-trend-chart", "sales-channel-chart", "sales-breakdown-table"];
+  if (!hasRows) {
+    empty.hidden = false;
+    empty.textContent =
+      (sales?.warnings?.[0] ??
+        "No sales data yet.") + " Add data/sales.csv to the repository and redeploy — see the README for the column format.";
+    for (const id of panels) document.getElementById(id).replaceChildren();
+    document.getElementById("sales-hero-value").textContent = "—";
+    document.getElementById("sales-hero-delta").replaceChildren();
+    document.getElementById("sales-hero-sub").textContent = "";
+    return;
+  }
+
+  const slice = sliceWindow(sales.daily, range, basis);
+  const channels = sales.channels || [];
+  const total = (rows) => ({
+    revenue: sum(rows, "revenue"),
+    orders: sum(rows, "orders"),
+  });
+  const now = total(slice.current);
+  const before = total(slice.previous);
+  const aov = (t) => (t.orders ? t.revenue / t.orders : NaN);
+
+  // A range reaching past what the file covers would otherwise draw the
+  // shortfall as a collapse to zero, which reads as lost sales.
+  const beyond = sales.coverage?.end && range.end > sales.coverage.end;
+  empty.hidden = !beyond;
+  if (beyond) {
+    empty.textContent =
+      `data/sales.csv covers ${prettyDate(sales.coverage.start)} to ${prettyDate(sales.coverage.end)}. ` +
+      `The selected range runs to ${prettyDate(range.end)}, so days after that count as zero.`;
+  }
+
+  document.getElementById("sales-hero-value").textContent = cash.money(now.revenue);
+  document.getElementById("sales-hero-delta").replaceChildren(
+    deltaNode(now.revenue, before.revenue, { format: cash.money }),
+  );
+  document.getElementById("sales-hero-sub").textContent =
+    basis === "none"
+      ? rangeLabel(slice.range)
+      : `${rangeLabel(slice.range)} · ${COMPARISON_LABEL[basis]} ${cash.money(before.revenue)} (${rangeLabel(slice.previousRange)})`;
+
+  document.getElementById("sales-range").textContent = rangeLabel(slice.range);
+
+  const tiles = [];
+  if (sales.hasOrders) {
+    tiles.push(
+      tile({ label: "Orders", value: compact(now.orders), current: now.orders, previous: before.orders }),
+      tile({
+        label: "Average order value",
+        value: cash.exact(aov(now)),
+        current: aov(now),
+        previous: aov(before),
+        deltaFormat: cash.exact,
+      }),
+    );
+  }
+  for (const c of channels) {
+    const current = sum(slice.current, `rev_${c.id}`);
+    const previous = sum(slice.previous, `rev_${c.id}`);
+    tiles.push(
+      tile({
+        label: `${c.label} revenue`,
+        value: cash.money(current),
+        current,
+        previous,
+        deltaFormat: cash.money,
+      }),
+    );
+  }
+  document.getElementById("sales-tiles").replaceChildren(...tiles);
+
+  const comparisonNote = basis === "none" ? "" : ` Compared with the ${COMPARISON_LABEL[basis]}.`;
+  document.getElementById("sales-trend-sub").textContent = `Daily revenue, all channels combined.${comparisonNote}`;
+
+  timeSeriesChart(document.getElementById("sales-trend-chart"), {
+    series: (() => {
+      const series = [
+        {
+          label: "Revenue",
+          color: surfaceColor("--series-3"),
+          points: slice.current.map((r) => ({ date: r.date, value: r.revenue })),
+        },
+      ];
+      if (slice.previous.length) {
+        series.push({
+          label: COMPARISON_LABEL[basis],
+          color: surfaceColor("--text-muted"),
+          endLabel: false,
+          points: slice.previous.map((r) => ({ date: r.date, value: r.revenue })),
+        });
+      }
+      return series;
+    })(),
+    format: cash.chart,
+  });
+
+  renderTable(document.getElementById("sales-trend-chart-table"), {
+    columns: [
+      { label: "Date", render: (r) => prettyDate(r.date) },
+      ...channels.map((c) => ({
+        label: c.label,
+        render: (r) => cash.money(r[`rev_${c.id}`] || 0),
+      })),
+      { label: "Total", render: (r) => cash.money(r.revenue) },
+    ],
+    rows: [...slice.current].reverse(),
+  });
+
+  const byChannel = channels
+    .map((c) => ({
+      id: c.id,
+      name: c.label,
+      revenue: sum(slice.current, `rev_${c.id}`),
+      orders: sum(slice.current, `ord_${c.id}`),
+      previous: sum(slice.previous, `rev_${c.id}`),
+    }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  barChart(document.getElementById("sales-channel-chart"), {
+    rows: byChannel.map((c) => ({
+      name: c.name,
+      value: c.revenue,
+      detail: [
+        { label: "Revenue", value: cash.exact(c.revenue) },
+        { label: "Orders", value: int.format(c.orders) },
+        { label: "Share", value: percent(now.revenue ? c.revenue / now.revenue : NaN) },
+      ],
+    })),
+    color: surfaceColor("--series-3"),
+    format: cash.chart,
+  });
+
+  const channelColumns = [
+    { label: "Channel", render: (r) => r.name },
+    { label: "Revenue", render: (r) => cash.money(r.revenue) },
+    ...(sales.hasOrders
+      ? [
+          { label: "Orders", render: (r) => int.format(r.orders) },
+          { label: "AOV", render: (r) => cash.exact(r.orders ? r.revenue / r.orders : NaN) },
+        ]
+      : []),
+    { label: "Share", render: (r) => percent(now.revenue ? r.revenue / now.revenue : NaN) },
+  ];
+
+  renderTable(document.getElementById("sales-channel-chart-table"), {
+    columns: channelColumns,
+    rows: byChannel,
+  });
+  renderTable(document.getElementById("sales-breakdown-table"), {
+    columns: channelColumns,
+    rows: byChannel,
+  });
+
+  document.getElementById("sales-breakdown-sub").textContent =
+    `${rangeLabel(slice.range)} · from data/sales.csv. The country, device and channel filters do not apply here.`;
+}
+
 function render() {
   const snapshot = state.snapshot;
   if (!snapshot) return;
@@ -588,9 +764,6 @@ function render() {
       deltaFormat: (v) => v.toFixed(1),
     }),
   );
-
-  const surfaceColor = (name) =>
-    getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   /* Charts */
 
@@ -845,6 +1018,8 @@ function render() {
   // rather than one sentence. Sample mode has no live config to check.
   if (warnings.length && !snapshot.sample) showDiagnostics({ staleWarnings: true });
   else document.getElementById("diagnostics").hidden = true;
+
+  renderSales(snapshot, snapshot.window?.ga4, basis, cash);
 }
 
 /* Wiring ------------------------------------------------------------------- */
@@ -1036,6 +1211,30 @@ for (const [id, key] of [
 ]) {
   document.getElementById(id).addEventListener("input", (event) => {
     state.search[key] = event.target.value;
+    render();
+  });
+}
+
+// Tabs. The range and comparison controls stay visible on both, because they
+// drive both datasets; the country, device and channel filters only reach the
+// Analytics tab, so they are hidden on Sales rather than appearing inert.
+for (const button of document.querySelectorAll(".tabs__btn")) {
+  button.addEventListener("click", () => {
+    const tab = button.dataset.tab;
+    for (const other of document.querySelectorAll(".tabs__btn")) {
+      const active = other === button;
+      other.classList.toggle("is-active", active);
+      if (active) other.setAttribute("aria-current", "page");
+      else other.removeAttribute("aria-current");
+    }
+    document.getElementById("tab-analytics").hidden = tab !== "analytics";
+    document.getElementById("tab-sales").hidden = tab !== "sales";
+    for (const id of ["filter-country", "filter-device", "filter-channel"]) {
+      document.getElementById(id).closest(".field").hidden = tab === "sales";
+    }
+    document.getElementById("filter-status").hidden = tab === "sales";
+    // Charts measure their container, which is zero-wide while hidden, so the
+    // newly shown tab has to draw after it becomes visible.
     render();
   });
 }
