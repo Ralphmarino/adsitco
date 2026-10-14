@@ -1,4 +1,4 @@
-import { timeSeriesChart, barChart, renderTable, labelCell } from "/charts.js";
+import { timeSeriesChart, columnChart, barChart, renderTable, labelCell } from "/charts.js";
 
 const SUPPORTED_WINDOWS = [7, 28, 90];
 const PASSWORD_KEY = "adsitco-report-password";
@@ -391,15 +391,23 @@ function syncFilterUI(snapshot) {
   const fromApi = snapshot.ga4?.channelOptions || [];
   if (fromApi.length) state.channelOptions = fromApi;
   else if (noFilters) state.channelOptions = (snapshot.ga4?.channels || []).map((c) => c.name);
-
   const select = document.getElementById("filter-channel");
-  const options = ['<option value="">All channels</option>'].concat(
-    state.channelOptions.map((name) => {
-      const safe = name.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
-      return `<option value="${safe}"${name === state.filters.channel ? " selected" : ""}>${safe}</option>`;
-    }),
-  );
-  select.innerHTML = options.join("");
+  const escape = (s) => s.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  // Both forms live in one control: "only this channel" and "everything but
+  // this channel". A second mode selector would cost a control to express
+  // something a second group of options already says plainly.
+  select.innerHTML = [
+    '<option value="">All channels</option>',
+    state.channelOptions.length
+      ? `<optgroup label="Only">${state.channelOptions
+          .map((name) => `<option value="${escape(name)}">${escape(name)}</option>`)
+          .join("")}</optgroup>` +
+        `<optgroup label="Exclude">${state.channelOptions
+          .map((name) => `<option value="!${escape(name)}">Everything except ${escape(name)}</option>`)
+          .join("")}</optgroup>`
+      : "",
+  ].join("");
+  select.value = state.filters.channel || "";
   document.getElementById("filter-device").value = state.filters.device;
   document.getElementById("filter-clear").hidden = noFilters;
 
@@ -426,10 +434,13 @@ function syncFilterUI(snapshot) {
   }
   const countryName =
     countryList.find((c) => c.value === state.filters.country)?.name || state.filters.country;
+  const channel = state.filters.channel.startsWith("!")
+    ? `all channels except ${state.filters.channel.slice(1)}`
+    : state.filters.channel && `${state.filters.channel} only`;
   const applied = [
     state.filters.country && countryName,
     state.filters.device && `${state.filters.device} only`,
-    state.filters.channel && `${state.filters.channel} only`,
+    channel,
   ].filter(Boolean);
   // Say plainly which panels a filter could not reach, rather than letting an
   // unfiltered search number sit under a filtered heading.
@@ -626,7 +637,125 @@ function renderSales(snapshot, range, basis, cash) {
   });
 
   document.getElementById("sales-breakdown-sub").textContent =
-    `${rangeLabel(slice.range)} · from data/sales.csv. The country, device and channel filters do not apply here.`;
+    `${rangeLabel(slice.range)} · from ${sales.source ?? "the sales file"}. The country, device and channel filters do not apply here.`;
+
+  renderSalesMonthly(sales, cash);
+  renderSalesPerChannel(sales, slice, channels, basis, cash);
+}
+
+/**
+ * Thirteen complete months, this year against last.
+ *
+ * Deliberately independent of the date range: the workbook holds three years,
+ * and the question this answers — is the business growing — is one a 28-day
+ * line cannot show. The panel says so rather than quietly ignoring a control.
+ */
+function renderSalesMonthly(sales, cash) {
+  const monthly = new Map();
+  for (const row of sales.daily) {
+    const key = row.date.slice(0, 7);
+    monthly.set(key, (monthly.get(key) ?? 0) + row.revenue);
+  }
+
+  // Complete months only: a part-finished current month would read as a slump.
+  const keys = [...monthly.keys()].sort().filter((k) => monthIsComplete(k, sales.coverage?.end));
+  const recent = keys.slice(-13);
+
+  const groups = recent.map((key) => {
+    const [y, m] = key.split("-");
+    const previousKey = `${Number(y) - 1}-${m}`;
+    const date = new Date(`${key}-01T00:00:00Z`);
+    return {
+      key,
+      label: date.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" }),
+      short: date.toLocaleDateString(undefined, { month: "short", timeZone: "UTC" }),
+      values: { current: monthly.get(key) ?? 0, previous: monthly.get(previousKey) ?? 0 },
+    };
+  });
+
+  const hasPriorYear = groups.some((g) => g.values.previous > 0);
+  const series = [{ key: "current", label: "This year", color: surfaceColor("--series-3") }];
+  if (hasPriorYear) {
+    series.push({ key: "previous", label: "Same month last year", color: surfaceColor("--text-muted") });
+  }
+
+  columnChart(document.getElementById("sales-monthly-chart"), { groups, series, format: cash.chart });
+
+  renderTable(document.getElementById("sales-monthly-chart-table"), {
+    columns: [
+      { label: "Month", render: (g) => g.label },
+      { label: "Revenue", render: (g) => cash.money(g.values.current) },
+      ...(hasPriorYear
+        ? [
+            { label: "Year earlier", render: (g) => cash.money(g.values.previous) },
+            {
+              label: "Change",
+              render: (g) =>
+                g.values.previous
+                  ? `${g.values.current >= g.values.previous ? "+" : ""}${(((g.values.current - g.values.previous) / g.values.previous) * 100).toFixed(1)}%`
+                  : "—",
+            },
+          ]
+        : []),
+    ],
+    rows: [...groups].reverse(),
+  });
+}
+
+/** A month counts as complete once the data reaches its final day. */
+function monthIsComplete(key, coverageEnd) {
+  if (!coverageEnd) return false;
+  const [y, m] = key.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+  return coverageEnd >= lastDay;
+}
+
+/**
+ * One chart per channel rather than three lines on one axis. Call revenue runs
+ * an order of magnitude above Web and eBay here, and on a shared axis the two
+ * smaller channels flatten into the baseline and stop being readable.
+ */
+function renderSalesPerChannel(sales, slice, channels, basis, cash) {
+  const host = document.getElementById("sales-perchannel");
+  document.getElementById("sales-perchannel-range").textContent = rangeLabel(slice.range);
+  host.replaceChildren();
+
+  for (const channel of channels) {
+    const panel = document.createElement("section");
+    panel.className = "panel";
+
+    const title = document.createElement("h3");
+    title.className = "panel__title";
+    title.textContent = channel.label;
+
+    const sub = document.createElement("p");
+    sub.className = "panel__sub";
+    sub.textContent = `${cash.money(sum(slice.current, `rev_${channel.id}`))} in this range`;
+
+    const chart = document.createElement("div");
+    chart.className = "chart";
+    panel.append(title, sub, chart);
+    host.appendChild(panel);
+
+    // Appended before drawing: a chart measures its container, which has no
+    // width until it is in the document.
+    const series = [
+      {
+        label: channel.label,
+        color: surfaceColor("--series-3"),
+        points: slice.current.map((r) => ({ date: r.date, value: r[`rev_${channel.id}`] || 0 })),
+      },
+    ];
+    if (slice.previous.length) {
+      series.push({
+        label: COMPARISON_LABEL[basis],
+        color: surfaceColor("--text-muted"),
+        endLabel: false,
+        points: slice.previous.map((r) => ({ date: r.date, value: r[`rev_${channel.id}`] || 0 })),
+      });
+    }
+    timeSeriesChart(chart, { series, format: cash.chart });
+  }
 }
 
 function render() {
@@ -905,6 +1034,45 @@ function render() {
       { label: "Impressions", render: (r) => int.format(r.impressions) },
     ],
     rows: [...gsc.current].reverse(),
+  });
+
+  // CTR is a ratio, so it is rebuilt per day from clicks and impressions
+  // rather than averaged — and days with no impressions are left out, since
+  // 0/0 is not a zero click-through rate.
+  const ctrDays = gsc.current.filter((r) => r.impressions > 0);
+  const ctrPrev = gsc.previous.filter((r) => r.impressions > 0);
+  const ctrFormat = {
+    compact: (v) => (Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—"),
+    full: (v) => (Number.isFinite(v) ? `${(v * 100).toFixed(2)}%` : "—"),
+    axis: (v) => (Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—"),
+  };
+  const ctrSeries = [
+    {
+      label: "CTR",
+      color: surfaceColor("--series-2"),
+      points: ctrDays.map((r) => ({ date: r.date, value: r.clicks / r.impressions })),
+    },
+  ];
+  if (ctrPrev.length) {
+    ctrSeries.push({
+      label: COMPARISON_LABEL[basis],
+      color: surfaceColor("--text-muted"),
+      endLabel: false,
+      points: ctrPrev.map((r) => ({ date: r.date, value: r.clicks / r.impressions })),
+    });
+  }
+  document.getElementById("ctr-sub").textContent =
+    `Share of impressions that became a click.${comparisonNote}`;
+  timeSeriesChart(document.getElementById("ctr-chart"), { series: ctrSeries, format: ctrFormat });
+
+  renderTable(document.getElementById("ctr-chart-table"), {
+    columns: [
+      { label: "Date", render: (r) => prettyDate(r.date) },
+      { label: "CTR", render: (r) => percent(r.clicks / r.impressions) },
+      { label: "Clicks", render: (r) => int.format(r.clicks) },
+      { label: "Impressions", render: (r) => int.format(r.impressions) },
+    ],
+    rows: [...ctrDays].reverse(),
   });
 
   // Days with no impressions have no meaningful position; plotting them as 0

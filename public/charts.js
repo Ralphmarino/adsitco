@@ -286,10 +286,112 @@ export function timeSeriesChart(container, { series, format, invertY = false }) 
   container.appendChild(svg);
 }
 
+/**
+ * Vertical columns over time, optionally with a comparison series beside each.
+ *
+ * Daily lines answer "what happened last week"; monthly columns answer "how is
+ * the business trending", which a three-year dataset can show and a 28-day line
+ * cannot. Grouped rather than stacked, because the question is this month
+ * against the same month last year, not what the month was made of.
+ */
+export function columnChart(container, { groups, series, format }) {
+  if (!groups.length) {
+    emptyState(container, "Not enough data for a monthly view yet.");
+    return;
+  }
+
+  container.replaceChildren();
+  if (series.length > 1) container.appendChild(legend(series));
+
+  const width = Math.max(container.clientWidth || 640, 320);
+  const height = 270;
+  const pad = { top: 14, right: 12, bottom: 34, left: 56 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  const values = groups.flatMap((g) => series.map((s) => g.values[s.key] ?? 0));
+  const nice = niceTicks(Math.max(...values, 0));
+  const scaleY = (v) => pad.top + plotH - (v / nice.max) * plotH;
+
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width, height, role: "img" });
+
+  for (const tick of nice.ticks) {
+    const y = scaleY(tick);
+    el("line", { x1: pad.left, x2: pad.left + plotW, y1: y, y2: y, stroke: token("--gridline"), "stroke-width": 1 }, svg);
+    const label = el("text", {
+      x: pad.left - 9, y: y + 4, "text-anchor": "end",
+      fill: token("--text-muted"), "font-size": 11, "font-family": "inherit",
+    }, svg);
+    label.textContent = format.axis(tick);
+  }
+
+  const band = plotW / groups.length;
+  // 2px of surface between neighbouring columns; the band keeps the rest as air.
+  const columnWidth = Math.min(24, Math.max(4, (band - 10) / series.length - 2));
+
+  groups.forEach((group, gi) => {
+    const groupWidth = columnWidth * series.length + 2 * (series.length - 1);
+    const left = pad.left + band * gi + (band - groupWidth) / 2;
+
+    series.forEach((s, si) => {
+      const value = group.values[s.key] ?? 0;
+      const x = left + si * (columnWidth + 2);
+      const y = scaleY(Math.max(value, 0));
+      const h = Math.max(Math.abs(scaleY(value) - scaleY(0)), value ? 2 : 0);
+      if (h > 0) {
+        el("path", { d: barPath(x, y, columnWidth, h, 4, "top"), fill: s.color }, svg);
+      }
+    });
+
+    const hit = el("rect", { x: pad.left + band * gi, y: pad.top, width: band, height: plotH, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (event) => {
+      const rows = series
+        .map(
+          (s) =>
+            `<div class="tooltip__row"><span class="tooltip__key"><span class="chart__swatch" style="background:${s.color}"></span>${
+              s.label
+            }</span><span class="tooltip__value">${format.full(group.values[s.key] ?? 0)}</span></div>`,
+        )
+        .join("");
+      showTooltip(`<div class="tooltip__date">${group.label}</div>${rows}`, event);
+    });
+    hit.addEventListener("mouseleave", hideTooltip);
+  });
+
+  el("line", {
+    x1: pad.left, x2: pad.left + plotW, y1: pad.top + plotH, y2: pad.top + plotH,
+    stroke: token("--axis"), "stroke-width": 1,
+  }, svg);
+
+  // Label every column when they fit, otherwise every other one.
+  const step = band < 44 ? 2 : 1;
+  groups.forEach((group, i) => {
+    if (i % step !== 0) return;
+    const label = el("text", {
+      x: pad.left + band * i + band / 2, y: height - 12, "text-anchor": "middle",
+      fill: token("--text-muted"), "font-size": 10.5, "font-family": "inherit",
+    }, svg);
+    label.textContent = group.short ?? group.label;
+  });
+
+  container.appendChild(svg);
+}
+
 /** Path for a bar with only its data-end rounded; it stays square at the baseline. */
-function barPath(x, y, w, h, r) {
-  const radius = Math.min(r, w, h / 2);
+function barPath(x, y, w, h, r, end = "right") {
+  const radius = Math.min(r, w / 2, h);
   if (radius <= 0) return `M ${x} ${y} h ${w} v ${h} h ${-w} Z`;
+  if (end === "top") {
+    return [
+      `M ${x} ${y + h}`,
+      `V ${y + radius}`,
+      `a ${radius} ${radius} 0 0 1 ${radius} ${-radius}`,
+      `h ${w - radius * 2}`,
+      `a ${radius} ${radius} 0 0 1 ${radius} ${radius}`,
+      `V ${y + h}`,
+      "Z",
+    ].join(" ");
+  }
   return [
     `M ${x} ${y}`,
     `h ${w - radius}`,

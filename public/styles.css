@@ -358,6 +358,27 @@ body {
 
 /* Tabs --------------------------------------------------------------------- */
 
+/* Small multiples — one panel per series, so a dominant channel cannot flatten
+   the others the way it would sharing an axis. */
+.smallmultiples {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  margin-top: 10px;
+}
+
+.smallmultiples .panel {
+  padding: 14px 15px;
+}
+
+.smallmultiples .panel__title {
+  font-size: 13.5px;
+}
+
+.smallmultiples .chart {
+  margin-top: 8px;
+}
+
 .tabs {
   display: flex;
   gap: 2px;

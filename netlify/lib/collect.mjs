@@ -1,5 +1,6 @@
 import { daysAgo, shiftDays, shiftYears, daysBetween, isIsoDate } from "./dates.mjs";
 import { lookupCountry, countryOptions, DEFAULT_COUNTRY } from "./countries.mjs";
+import { parseChannelFilter } from "./filters.mjs";
 import { fetchGa4Daily, collectGa4Breakdowns } from "./ga4.mjs";
 import { fetchGscDaily, collectGscBreakdowns } from "./gsc.mjs";
 import { collectSales } from "./sales.mjs";
@@ -71,10 +72,20 @@ export function hasUsableData(snapshot) {
   return Boolean(snapshot?.ga4?.daily?.length || snapshot?.gsc?.daily?.length);
 }
 
+/**
+ * A channel selection is either "only this one" or "everything but this one".
+ * Re-exported so callers importing the collector keep working.
+ */
+export { parseChannelFilter };
+
 export function filterSignature(filters) {
   const parts = [];
   if (filters.device) parts.push(`d:${filters.device}`);
-  if (filters.channel) parts.push(`c:${filters.channel.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+  const channel = parseChannelFilter(filters.channel);
+  if (channel) {
+    const slug = channel.value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    parts.push(`c:${channel.exclude ? "not-" : ""}${slug}`);
+  }
   if (filters.country) parts.push(`g:${filters.country}`);
   return parts.length ? parts.join("_") : "all";
 }

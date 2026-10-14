@@ -269,6 +269,20 @@
           </section>
         </div>
 
+        <section class="panel" aria-labelledby="ctr-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="ctr-heading">Click-through rate</h2>
+              <p class="panel__sub" id="ctr-sub">
+                Share of impressions that became a click.
+              </p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="ctr-chart">Table</button>
+          </div>
+          <div class="chart" id="ctr-chart"></div>
+          <div class="table-view" id="ctr-chart-table" hidden></div>
+        </section>
+
         <section class="panel" aria-labelledby="position-heading">
           <div class="panel__head">
             <div>
@@ -370,6 +384,30 @@
           </div>
           <div class="chart" id="sales-trend-chart"></div>
           <div class="table-view" id="sales-trend-chart-table" hidden></div>
+        </section>
+
+        <section class="panel" aria-labelledby="sales-monthly-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="sales-monthly-heading">Monthly revenue, this year vs last</h2>
+              <p class="panel__sub">
+                The last 13 complete months. This panel always shows the same window —
+                the date range above does not change it.
+              </p>
+            </div>
+            <button class="btn btn--ghost" type="button" data-table-toggle="sales-monthly-chart">
+              Table
+            </button>
+          </div>
+          <div class="chart" id="sales-monthly-chart"></div>
+          <div class="table-view" id="sales-monthly-chart-table" hidden></div>
+        </section>
+
+        <section aria-labelledby="sales-perchannel-heading">
+          <h2 class="section__title" id="sales-perchannel-heading">
+            Each channel over time <span class="section__range" id="sales-perchannel-range"></span>
+          </h2>
+          <div class="smallmultiples" id="sales-perchannel"></div>
         </section>
 
         <div class="grid-2">

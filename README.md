@@ -213,6 +213,12 @@ a site realistically sees rather than all ~250 ISO entries; an unmapped country
 is left out of the list on purpose, since including it would filter one source
 and silently not the other.
 
+The channel control offers each channel twice — once as "only this channel" and
+once as "everything except this channel" — so excluding Direct takes one
+selection rather than needing a second control. An exclusion becomes a
+`notExpression` in the GA4 query, so it narrows the data at the source like any
+other filter.
+
 One honest limitation, stated in the UI rather than hidden: **Search Console has
 no channel dimension**, so a channel selection narrows the Analytics panels only.
 When one is active, the filter bar says the search panels ignore it. Country and
@@ -358,7 +364,20 @@ dates, `"$4,820.50"`, parenthesised negatives, CRLF and a BOM are all handled.
 
 Total sales as the headline, then orders, average order value, inbound phone
 calls and the share of those calls that became an order, plus revenue per
-channel; daily revenue over time; and revenue by channel with each one's share.
+channel. Then:
+
+- **Sales over time** — daily revenue, with the comparison period behind it.
+- **Monthly revenue, this year vs last** — thirteen complete months, each beside
+  the same month a year earlier. This one is deliberately independent of the
+  date range: the workbook holds three years, and "is the business growing" is a
+  question a 28-day line cannot answer. The panel says so.
+- **Each channel over time** — one small chart per channel rather than three
+  lines sharing an axis. Call revenue runs an order of magnitude above Web and
+  eBay, so on a shared axis the two smaller channels flatten into the baseline.
+- **Revenue by channel** with each one's share.
+
+Only complete months appear in the monthly view; a part-finished current month
+would read as a slump rather than a month still in progress.
 
 **The date range and comparison controls drive this tab too**, so 90 days or
 year-over-year moves sales and analytics together. The country, device and

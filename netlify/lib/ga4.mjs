@@ -1,6 +1,7 @@
 import { googleFetch, requireEnv } from "./google-auth.mjs";
 import { fromCompactDate } from "./dates.mjs";
 import { lookupCountry } from "./countries.mjs";
+import { parseChannelFilter } from "./filters.mjs";
 
 const SCOPES = ["https://www.googleapis.com/auth/analytics.readonly"];
 
@@ -90,13 +91,17 @@ function dimensionFilter(filters = {}) {
       },
     });
   }
-  if (filters.channel) {
-    expressions.push({
+  const channel = parseChannelFilter(filters.channel);
+  if (channel) {
+    const expression = {
       filter: {
         fieldName: "sessionDefaultChannelGroup",
-        stringFilter: { value: filters.channel, matchType: "EXACT" },
+        stringFilter: { value: channel.value, matchType: "EXACT" },
       },
-    });
+    };
+    // "Everything except Direct" is the same filter wrapped in a negation,
+    // which GA4 expresses as notExpression.
+    expressions.push(channel.exclude ? { notExpression: expression } : expression);
   }
   if (filters.country) {
     // countryId is the ISO alpha-2 code, so the filter does not depend on the
