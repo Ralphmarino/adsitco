@@ -475,18 +475,18 @@ function renderSales(snapshot, range, basis, cash) {
   const total = (rows) => ({
     revenue: sum(rows, "revenue"),
     orders: sum(rows, "orders"),
+    calls: sum(rows, "calls"),
   });
   const now = total(slice.current);
   const before = total(slice.previous);
   const aov = (t) => (t.orders ? t.revenue / t.orders : NaN);
-
   // A range reaching past what the file covers would otherwise draw the
   // shortfall as a collapse to zero, which reads as lost sales.
   const beyond = sales.coverage?.end && range.end > sales.coverage.end;
   empty.hidden = !beyond;
   if (beyond) {
     empty.textContent =
-      `data/sales.csv covers ${prettyDate(sales.coverage.start)} to ${prettyDate(sales.coverage.end)}. ` +
+      `${sales.source ?? "The sales file"} covers ${prettyDate(sales.coverage.start)} to ${prettyDate(sales.coverage.end)}. ` +
       `The selected range runs to ${prettyDate(range.end)}, so days after that count as zero.`;
   }
 
@@ -511,6 +511,20 @@ function renderSales(snapshot, range, basis, cash) {
         current: aov(now),
         previous: aov(before),
         deltaFormat: cash.exact,
+      }),
+    );
+  }
+  if (sales.hasCalls) {
+    tiles.push(
+      tile({ label: "Phone calls", value: compact(now.calls), current: now.calls, previous: before.calls }),
+      // Call volume and the orders those calls produced are separate columns in
+      // the export, so the rate between them is worth stating outright.
+      tile({
+        label: "Calls to order",
+        value: percent(now.calls ? sum(slice.current, "ord_call") / now.calls : NaN),
+        current: now.calls ? sum(slice.current, "ord_call") / now.calls : NaN,
+        previous: before.calls ? sum(slice.previous, "ord_call") / before.calls : NaN,
+        deltaFormat: percent,
       }),
     );
   }

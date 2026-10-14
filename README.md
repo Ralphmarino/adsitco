@@ -298,15 +298,51 @@ The report has two tabs: **Search & analytics** (GA4 + Search Console) and
 
 ### Where the file goes
 
-`data/sales.csv` — the repository root, **not `public/`**. Anything under
-`public/` is served to anyone with the URL and would bypass the password gate,
-and sales figures should sit behind the same gate as everything else. The build
-step turns the CSV into a module the functions import, so the file itself is
-never served.
+`data/` in the repository root — **not `public/`**. Anything under `public/` is
+served to anyone with the URL and would bypass the password gate; sales figures
+belong behind the same gate as everything else. A build step reads the file and
+generates a module the functions import, so the file itself is never served.
 
-### Format
+### The workbook
 
-One row per date and channel:
+The live source is the `.xlsx` export, tabs broken out by month
+(`data/[Final]Ebay & Phone Sales Report - Adsitco.xlsx`). The build reads **every
+sheet** and takes its dates from the `Date` column rather than the tab name, so
+inconsistent naming — `Oct (26)`, `December(25)`, a bare `September` meaning
+2023 — does not matter.
+
+Columns it reads, as the export names them:
+
+| Column | Used as |
+| --- | --- |
+| `Date` | the day |
+| `Web - Number of orders` / `Web - Gross sales amount` | Web orders and revenue |
+| `eBay Orders` / `eBay Sales` | eBay orders and revenue |
+| `Phone Call Quantity Sold` / `Phone Call Sales` | Call orders and revenue |
+| `Phone Calls` | inbound call volume — shown separately, since it is calls received, not orders |
+
+**Over half the dates appear in more than one sheet**: the `2024 Total` and
+`2025 Total` sheets restate the monthly tabs. Summing every sheet would come
+close to doubling three years of revenue, so each date is taken once, preferring
+the monthly tabs. Where a duplicate disagrees, the build prints a warning rather
+than silently picking one — quietly choosing between two different numbers is
+how a report ends up wrong without anyone noticing.
+
+Also skipped, deliberately: the `report-last_month-*` sheets, which are web-only
+exports with a different schema whose months are already covered in full by the
+monthly tabs, and the `2026 Total` / `2025 Total` footer rows at the bottom of
+each tab, which would double-count.
+
+To add a month: add the tab, commit the workbook, push. Run
+`node scripts/build-sales.mjs` locally first — it prints the row count, date
+range, channels, total revenue and any warnings.
+
+Reading `.xlsx` needs no dependency; `scripts/lib/xlsx.mjs` is a small ZIP and
+XML reader covering exactly what this file uses.
+
+### CSV instead
+
+A flat `data/sales.csv` is also accepted and takes precedence if present:
 
 ```csv
 date,channel,orders,revenue
@@ -315,43 +351,21 @@ date,channel,orders,revenue
 2026-09-01,ebay,4,610.25
 ```
 
-`data/sales.example.csv` is a copy you can start from. The parser is deliberately
-forgiving of what a real export looks like:
-
-| | Accepted |
-| --- | --- |
-| Column names | `date` / `order date` / `day`; `channel` / `source` / `sales channel`; `orders` / `order count` / `transactions`; `revenue` / `sales` / `amount` / `net sales` |
-| Dates | `2026-09-01` or `9/1/2026` |
-| Money | `4820.50`, `$4,820.50`, `"$4,820.50"`, `(45.00)` for a negative |
-| Channels | web / website / online / ecommerce → **Web**; call / phone / call center → **Call**; ebay → **eBay** |
-
-Quoted fields, commas inside values, CRLF line endings and a UTF-8 BOM are all
-handled. A channel it does not recognise is kept under its own name rather than
-dropped — losing revenue silently is worse than showing an unplanned channel.
-Rows with an unreadable date or amount are skipped and counted in a warning
-shown on the tab.
-
-Order counts are optional. Without them the revenue figures still work; orders
-and average order value are hidden rather than shown as zero.
-
-### Updating it
-
-Commit a new `data/sales.csv` and push. Netlify rebuilds, the build step
-regenerates the module, and the tab updates — no environment variables, no API
-quota. Run `node scripts/build-sales.mjs` locally first to see the row count,
-date range and any warnings before pushing.
+`data/sales.example.csv` is a copy to start from. Column names, `M/D/YYYY`
+dates, `"$4,820.50"`, parenthesised negatives, CRLF and a BOM are all handled.
 
 ### What it shows
 
-Total sales as the headline, then orders, average order value and revenue per
+Total sales as the headline, then orders, average order value, inbound phone
+calls and the share of those calls that became an order, plus revenue per
 channel; daily revenue over time; and revenue by channel with each one's share.
 
 **The date range and comparison controls drive this tab too**, so 90 days or
 year-over-year moves sales and analytics together. The country, device and
-channel filters do not — the CSV carries no such dimensions — so those controls
-are hidden on this tab rather than sitting there inert.
+channel filters do not — the workbook carries no such dimensions — so those
+controls are hidden on this tab rather than sitting there inert.
 
-If the selected range runs past the last date in the file, the tab says so.
+If the selected range runs past the last date with data, the tab says so.
 Otherwise the missing days would be drawn as zero and read as collapsing sales.
 
 ## Branding

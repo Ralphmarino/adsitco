@@ -17,7 +17,7 @@ export function collectSales({ start, end }) {
     if (row.date < start || row.date > end) continue;
     let day = byDate.get(row.date);
     if (!day) {
-      day = { date: row.date, revenue: 0, orders: 0 };
+      day = { date: row.date, revenue: 0, orders: 0, calls: 0 };
       for (const c of channels) {
         day[`rev_${c.id}`] = 0;
         day[`ord_${c.id}`] = 0;
@@ -26,6 +26,9 @@ export function collectSales({ start, end }) {
     }
     day.revenue += row.revenue;
     day.orders += row.orders;
+    // Inbound call volume, which the export tracks separately from the orders
+    // those calls produced.
+    day.calls += row.calls ?? 0;
     day[`rev_${row.channel}`] = (day[`rev_${row.channel}`] ?? 0) + row.revenue;
     day[`ord_${row.channel}`] = (day[`ord_${row.channel}`] ?? 0) + row.orders;
   }
@@ -36,12 +39,14 @@ export function collectSales({ start, end }) {
 
   return {
     present: Boolean(SALES_META.present && SALES_ROWS.length),
+    source: SALES_META.source ?? null,
     channels,
     daily,
     // What the file actually covers, so a range reaching past it can say so
     // rather than drawing the shortfall as a collapse to zero.
     coverage: { start: SALES_META.firstDate ?? null, end: SALES_META.lastDate ?? null },
     hasOrders: SALES_ROWS.some((r) => r.orders > 0),
+    hasCalls: SALES_ROWS.some((r) => (r.calls ?? 0) > 0),
     warnings: SALES_META.warnings ?? [],
     builtAt: SALES_META.builtAt ?? null,
   };
