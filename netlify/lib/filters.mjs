@@ -2,20 +2,26 @@
  * Filter shapes shared between the collector and the API layers.
  *
  * This lives apart from collect.mjs so the GA4 layer can read a filter without
- * importing the collector that imports it — the cycle resolved, but only
- * because nothing called across it at module load, which is a fragile thing to
- * rely on.
+ * importing the collector that imports it.
  */
 
 /**
- * A channel selection is either "only this one" or "everything but this one",
- * encoded as a plain string so it survives a URL and a cache key unchanged:
- * "Direct" includes, "!Direct" excludes.
+ * Channels are a chosen set, not one value.
+ *
+ * "Only Organic Search" and "everything except Direct" are the same question
+ * asked twice — which channels do you want — so the filter carries the list and
+ * the UI ticks boxes. An empty list means every channel, which is also what an
+ * unticked-everything state collapses to: a report of nothing helps no one.
  */
-export function parseChannelFilter(channel) {
-  const raw = String(channel ?? "").trim();
-  if (!raw) return null;
-  const exclude = raw.startsWith("!");
-  const value = (exclude ? raw.slice(1) : raw).trim();
-  return value ? { exclude, value } : null;
+export function parseChannelFilter(value) {
+  const list = (Array.isArray(value) ? value : String(value ?? "").split(","))
+    .map((v) => String(v).trim())
+    .filter(Boolean);
+  // Deduplicated and ordered so the same selection always yields one cache key.
+  return [...new Set(list)].sort((a, b) => a.localeCompare(b));
+}
+
+export function channelSignature(channels) {
+  if (!channels.length) return "";
+  return channels.map((c) => c.toLowerCase().replace(/[^a-z0-9]+/g, "-")).join("+");
 }

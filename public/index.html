@@ -93,6 +93,7 @@
           Search &amp; analytics
         </button>
         <button class="tabs__btn" type="button" data-tab="sales">Sales</button>
+        <button class="tabs__btn" type="button" data-tab="diff">Differential</button>
       </nav>
 
       <div class="filterbar">
@@ -150,12 +151,20 @@
           </select>
         </label>
 
-        <label class="field">
+        <div class="field" id="filter-channel-field">
           <span class="field__label">Channel</span>
-          <select class="field__control" id="filter-channel">
-            <option value="">All channels</option>
-          </select>
-        </label>
+          <div class="picker">
+            <button class="field__control picker__button" id="filter-channel" type="button"
+                    aria-haspopup="true" aria-expanded="false">All channels</button>
+            <div class="picker__menu" id="channel-menu" hidden>
+              <div class="picker__actions">
+                <button type="button" class="chip" data-channel-all>Select all</button>
+                <button type="button" class="chip" data-channel-none>Clear</button>
+              </div>
+              <div class="picker__list" id="channel-list"></div>
+            </div>
+          </div>
+        </div>
 
         <button class="btn" id="filter-clear" type="button" hidden>Clear filters</button>
         <span class="filterbar__status" id="filter-status"></span>
@@ -432,6 +441,49 @@
             <div class="table-view" id="sales-breakdown-table"></div>
           </section>
         </div>
+      </main>
+
+      <main class="page" id="tab-diff" hidden>
+        <p class="notice notice--inline" id="diff-status" hidden></p>
+
+        <div class="diffbar">
+          <div class="segmented" role="group" aria-label="Comparison">
+            <button class="segmented__btn is-active" type="button" data-diff="period">
+              Last 6 months vs previous 6
+            </button>
+            <button class="segmented__btn" type="button" data-diff="month">Month over month</button>
+          </div>
+          <input class="field__control field__control--search" id="diff-search" type="search"
+                 placeholder="Filter URLs…" aria-label="Filter URLs" />
+          <a class="btn" id="diff-csv" href="/api/differential?format=csv" download>Download all URLs (CSV)</a>
+        </div>
+
+        <section aria-labelledby="diff-summary-heading">
+          <h2 class="section__title" id="diff-summary-heading">
+            Site-wide <span class="section__range" id="diff-range"></span>
+          </h2>
+          <div class="tiles" id="diff-tiles"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="diff-movers-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="diff-movers-heading">Biggest movers</h2>
+              <p class="panel__sub" id="diff-movers-sub"></p>
+            </div>
+          </div>
+          <div class="chart" id="diff-movers-chart"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="diff-table-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="diff-table-heading">By URL</h2>
+              <p class="panel__sub" id="diff-table-sub"></p>
+            </div>
+          </div>
+          <div class="table-view table-view--tall" id="diff-table"></div>
+        </section>
       </main>
 
       <footer class="footer">

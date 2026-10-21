@@ -466,6 +466,142 @@ body {
   min-width: 0;
 }
 
+/* Checkbox picker ---------------------------------------------------------
+   A list of channels where any subset can be ticked. "Only Organic" and
+   "everything except Direct" are the same question — which channels do you
+   want — so one control answers both instead of a dropdown listing each
+   channel twice. */
+
+.picker {
+  position: relative;
+}
+
+.picker__button {
+  text-align: left;
+  cursor: pointer;
+  min-width: 170px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.picker__button::after {
+  content: "▾";
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.picker__menu {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25);
+  padding: 8px;
+}
+
+.picker__actions {
+  display: flex;
+  gap: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--gridline);
+}
+
+.picker__list {
+  display: grid;
+  gap: 1px;
+}
+
+.picker__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 7px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.picker__row:hover {
+  background: var(--wash);
+}
+
+.picker__row input {
+  accent-color: var(--brand-orange-deep);
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.picker__count {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Differential ------------------------------------------------------------ */
+
+.diffbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.diffbar .field__control--search {
+  margin-top: 0;
+  flex: 1 1 220px;
+  max-width: 340px;
+}
+
+.diffbar .btn {
+  text-decoration: none;
+  line-height: 1.6;
+}
+
+.table-view--tall {
+  max-height: 620px;
+}
+
+th.is-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.is-sortable:hover {
+  color: var(--text-primary);
+}
+
+th .sort-arrow {
+  color: var(--brand-orange);
+  margin-left: 3px;
+}
+
+.delta-up {
+  color: var(--delta-up);
+  font-weight: 600;
+}
+
+.delta-down {
+  color: var(--delta-down);
+  font-weight: 600;
+}
+
+.url-cell {
+  max-width: 420px;
+  word-break: break-all;
+}
+
 .chipset {
   display: inline-flex;
   gap: 4px;

@@ -1,10 +1,13 @@
-import { timeSeriesChart, columnChart, barChart, renderTable, labelCell } from "/charts.js";
+import { timeSeriesChart, columnChart, barChart, divergingBarChart, renderTable, labelCell } from "/charts.js";
 
 const SUPPORTED_WINDOWS = [7, 28, 90];
 const PASSWORD_KEY = "adsitco-report-password";
 
 /** The Sales tab's own selection; the analytics range does not apply to it. */
 const salesState = { from: null, to: null, data: null, loading: null };
+
+/** The Differential tab: GSC movement per URL, on its own endpoint. */
+const diffState = { mode: "period", search: "", sort: "delta", dir: "desc", data: null, loading: null };
 
 const state = {
   days: 28,
@@ -15,7 +18,7 @@ const state = {
   demo: new URLSearchParams(location.search).get("demo") === "1",
   // country is null until the first response: the server owns the default, and
   // the page adopts whatever it reports rather than duplicating that decision.
-  filters: { device: "", channel: "", country: null },
+  filters: { device: "", channels: [], country: null },
   // Captured from the first unfiltered load so the dropdown still lists every
   // channel after one of them narrows the response.
   channelOptions: [],
@@ -290,7 +293,7 @@ function reportUrl(days = state.days, filters = state.filters) {
     params.set("days", String(days));
   }
   if (filters.device) params.set("device", filters.device);
-  if (filters.channel) params.set("channel", filters.channel);
+  if (filters.channels.length) params.set("channels", filters.channels.join(","));
   // null means "first load, let the server apply its default"; empty string is
   // an explicit worldwide request and has to be sent as the sentinel.
   if (filters.country === "") params.set("country", "all");
@@ -370,7 +373,7 @@ function setNotice(message) {
 
 /** Whether any dimension filter is narrowing the analytics tab. */
 function hasDimensionFilters() {
-  return Boolean(state.filters.device || state.filters.channel || state.filters.country);
+  return Boolean(state.filters.device || state.filters.channels.length || state.filters.country);
 }
 
 function syncFilterUI(snapshot) {
@@ -399,23 +402,7 @@ function syncFilterUI(snapshot) {
   const fromApi = snapshot.ga4?.channelOptions || [];
   if (fromApi.length) state.channelOptions = fromApi;
   else if (noFilters) state.channelOptions = (snapshot.ga4?.channels || []).map((c) => c.name);
-  const select = document.getElementById("filter-channel");
-  const escape = (s) => s.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
-  // Both forms live in one control: "only this channel" and "everything but
-  // this channel". A second mode selector would cost a control to express
-  // something a second group of options already says plainly.
-  select.innerHTML = [
-    '<option value="">All channels</option>',
-    state.channelOptions.length
-      ? `<optgroup label="Only">${state.channelOptions
-          .map((name) => `<option value="${escape(name)}">${escape(name)}</option>`)
-          .join("")}</optgroup>` +
-        `<optgroup label="Exclude">${state.channelOptions
-          .map((name) => `<option value="!${escape(name)}">Everything except ${escape(name)}</option>`)
-          .join("")}</optgroup>`
-      : "",
-  ].join("");
-  select.value = state.filters.channel || "";
+  renderChannelPicker();
   document.getElementById("filter-device").value = state.filters.device;
   document.getElementById("filter-clear").hidden = noFilters || !document.getElementById("tab-sales").hidden;
 
@@ -425,14 +412,14 @@ function syncFilterUI(snapshot) {
   // than let a selection appear to work and change nothing, the controls are
   // disabled and say why.
   if (state.demo) {
-    select.disabled = true;
+    document.getElementById("filter-channel").disabled = true;
     countrySelect.disabled = true;
     document.getElementById("filter-device").disabled = true;
     document.getElementById("filter-clear").hidden = true;
     status.textContent = "Filters need live data — they are disabled in sample mode.";
     return;
   }
-  select.disabled = false;
+  document.getElementById("filter-channel").disabled = false;
   countrySelect.disabled = false;
   document.getElementById("filter-device").disabled = false;
 
@@ -442,9 +429,15 @@ function syncFilterUI(snapshot) {
   }
   const countryName =
     countryList.find((c) => c.value === state.filters.country)?.name || state.filters.country;
-  const channel = state.filters.channel.startsWith("!")
-    ? `all channels except ${state.filters.channel.slice(1)}`
-    : state.filters.channel && `${state.filters.channel} only`;
+  const picked = state.filters.channels;
+  const all = state.channelOptions.length;
+  const channel = !picked.length
+    ? ""
+    : picked.length === 1
+      ? `${picked[0]} only`
+      : all && picked.length === all - 1
+        ? `all channels except ${state.channelOptions.find((c) => !picked.includes(c))}`
+        : `${picked.length} of ${all || picked.length} channels`;
   const applied = [
     state.filters.country && countryName,
     state.filters.device && `${state.filters.device} only`,
@@ -1458,7 +1451,6 @@ document.getElementById("comparison").addEventListener("change", (event) => {
 
 for (const [id, key] of [
   ["filter-device", "device"],
-  ["filter-channel", "channel"],
   ["filter-country", "country"],
 ]) {
   document.getElementById(id).addEventListener("change", (event) => {
@@ -1472,7 +1464,7 @@ for (const [id, key] of [
 }
 
 document.getElementById("filter-clear").addEventListener("click", () => {
-  state.filters = { device: "", channel: "", country: "" };
+  state.filters = { device: "", channels: [], country: "" };
   refresh();
 });
 
@@ -1564,9 +1556,372 @@ for (const chip of document.querySelectorAll(".chip")) {
   });
 }
 
-// Tabs. The range and comparison controls stay visible on both, because they
-// drive both datasets; the country, device and channel filters only reach the
-// Analytics tab, so they are hidden on Sales rather than appearing inert.
+/* Differential tab --------------------------------------------------------
+ *
+ * Per-URL movement in Search Console, on two comparisons: the last six months
+ * against the six before, and the latest complete month against the one
+ * before. Served from /api/differential, which caches it — the underlying
+ * months only change monthly.
+ */
+
+async function ensureDifferentialLoaded() {
+  if (diffState.data || diffState.loading) return diffState.loading;
+  const status = document.getElementById("diff-status");
+  status.hidden = false;
+  status.textContent = "Loading Search Console history…";
+
+  const headers = {};
+  if (state.password) headers["x-report-password"] = state.password;
+  diffState.loading = fetch("/api/differential", { headers })
+    .then(async (res) => {
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || `request failed (${res.status})`);
+      return body;
+    })
+    .then((data) => {
+      diffState.data = data;
+      return data;
+    })
+    .catch((err) => {
+      diffState.data = { error: err.message, rows: [] };
+      return diffState.data;
+    })
+    .finally(() => {
+      diffState.loading = null;
+    });
+  return diffState.loading;
+}
+
+const DIFF_COLUMNS = [
+  { key: "url", label: "URL", align: "left" },
+  { key: "clicksRecent", label: "Clicks" },
+  { key: "clicksPrior", label: "Prev" },
+  { key: "clicksDelta", label: "Δ Clicks", delta: true },
+  { key: "imprRecent", label: "Impr." },
+  { key: "imprPrior", label: "Prev" },
+  { key: "imprDelta", label: "Δ Impr.", delta: true },
+  { key: "ctrRecent", label: "CTR" },
+  { key: "posRecent", label: "Pos." },
+  { key: "posDelta", label: "Δ Pos.", delta: true },
+];
+
+function diffRowValues(row, mode) {
+  const side = mode === "month" ? row.month : row.period;
+  return {
+    url: row.url,
+    clicksRecent: side.recent.clicks,
+    clicksPrior: side.prior.clicks,
+    clicksDelta: side.delta.clicks,
+    imprRecent: side.recent.impressions,
+    imprPrior: side.prior.impressions,
+    imprDelta: side.delta.impressions,
+    ctrRecent: side.recent.ctr,
+    posRecent: side.recent.position,
+    // Already signed so that positive means "moved up the page".
+    posDelta: side.delta.position,
+  };
+}
+
+function deltaCell(value, format, invertColour = false) {
+  const span = document.createElement("span");
+  if (!value) {
+    span.textContent = "—";
+    return span;
+  }
+  const good = invertColour ? value < 0 : value > 0;
+  span.className = good ? "delta-up" : "delta-down";
+  // The sign is spelled out rather than left to the colour: red and green
+  // alone do not survive a colourblind reader, a printout, or a screenshot.
+  span.textContent = `${value > 0 ? "+" : "\u2212"}${format(value)}`;
+  return span;
+}
+
+function renderDifferential() {
+  const data = diffState.data;
+  const status = document.getElementById("diff-status");
+  if (!data) return;
+
+  if (data.error) {
+    status.hidden = false;
+    status.textContent = `Could not load the differential: ${data.error}`;
+    return;
+  }
+
+  const mode = diffState.mode;
+  const totals = mode === "month" ? data.totals.month : data.totals.period;
+  const win = mode === "month"
+    ? { recent: data.windows.thisMonth, prior: data.windows.lastMonth }
+    : { recent: data.windows.recent, prior: data.windows.prior };
+
+  const notes = [];
+  if (data.truncated) {
+    notes.push("Search Console returned its 25,000-row maximum, so the longest tail of URLs is not included.");
+  }
+  if (data.cache === "stale") notes.push("Showing cached figures; the last refresh failed.");
+  notes.push(`${data.urlCount.toLocaleString()} URLs in total; the table lists the ${data.shown.toLocaleString()} that moved most. The CSV has every one.`);
+  status.hidden = false;
+  status.textContent = notes.join(" ");
+
+  document.getElementById("diff-range").textContent = `${win.recent.label} vs ${win.prior.label}`;
+
+  const pctChange = (now, before) => (before ? (now - before) / before : NaN);
+  document.getElementById("diff-tiles").replaceChildren(
+    tile({
+      label: "Clicks",
+      value: compact(totals.recent.clicks),
+      current: totals.recent.clicks,
+      previous: totals.prior.clicks,
+    }),
+    tile({
+      label: "Impressions",
+      value: compact(totals.recent.impressions),
+      current: totals.recent.impressions,
+      previous: totals.prior.impressions,
+    }),
+    tile({
+      label: "CTR",
+      value: percent(totals.recent.ctr),
+      current: totals.recent.ctr,
+      previous: totals.prior.ctr,
+      deltaFormat: percent,
+    }),
+    tile({
+      label: "Average position",
+      value: totals.recent.position ? totals.recent.position.toFixed(1) : "—",
+      current: totals.recent.position,
+      previous: totals.prior.position,
+      lowerIsBetter: true,
+      deltaFormat: (v) => v.toFixed(1),
+    }),
+  );
+
+  const term = diffState.search.trim().toLowerCase();
+  const rows = data.rows
+    .map((r) => diffRowValues(r, mode))
+    .filter((r) => !term || r.url.toLowerCase().includes(term));
+
+  const dir = diffState.dir === "asc" ? 1 : -1;
+  const sortKey = diffState.sort === "delta" ? "clicksDelta" : diffState.sort;
+  rows.sort((a, b) => {
+    const x = a[sortKey];
+    const y = b[sortKey];
+    if (typeof x === "string") return x.localeCompare(y) * dir;
+    // Sorting by a delta is asking "what moved", so magnitude leads.
+    if (sortKey.endsWith("Delta")) return (Math.abs(y) - Math.abs(x)) * (dir === -1 ? 1 : -1);
+    return (y - x) * (dir === -1 ? 1 : -1);
+  });
+
+  document.getElementById("diff-table-sub").textContent =
+    `${rows.length.toLocaleString()} URLs shown · ${win.recent.label} against ${win.prior.label}`;
+
+  renderSortableTable(document.getElementById("diff-table"), rows);
+  renderMovers(rows, win);
+}
+
+function renderSortableTable(container, rows) {
+  container.replaceChildren();
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "chart__empty";
+    p.textContent = "No URLs match that filter.";
+    container.appendChild(p);
+    return;
+  }
+
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const col of DIFF_COLUMNS) {
+    const th = document.createElement("th");
+    th.textContent = col.label;
+    th.scope = "col";
+    th.className = "is-sortable";
+    if (diffState.sort === col.key) {
+      const arrow = document.createElement("span");
+      arrow.className = "sort-arrow";
+      arrow.textContent = diffState.dir === "asc" ? "▲" : "▼";
+      th.appendChild(arrow);
+    }
+    th.addEventListener("click", () => {
+      if (diffState.sort === col.key) diffState.dir = diffState.dir === "asc" ? "desc" : "asc";
+      else {
+        diffState.sort = col.key;
+        diffState.dir = "desc";
+      }
+      renderDifferential();
+    });
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+
+  const tbody = document.createElement("tbody");
+  for (const row of rows.slice(0, 500)) {
+    const tr = document.createElement("tr");
+    for (const col of DIFF_COLUMNS) {
+      const td = document.createElement("td");
+      const value = row[col.key];
+      if (col.key === "url") {
+        td.className = "url-cell";
+        const link = document.createElement("a");
+        link.href = value;
+        link.target = "_blank";
+        link.rel = "noreferrer noopener";
+        link.textContent = value.replace(/^https?:\/\/[^/]+/, "") || "/";
+        link.title = value;
+        td.appendChild(link);
+      } else if (col.key === "posDelta") {
+        // Position is already signed so up is better; the colour follows.
+        td.appendChild(deltaCell(value, (v) => Math.abs(v).toFixed(1)));
+      } else if (col.delta) {
+        td.appendChild(deltaCell(value, (v) => int.format(Math.abs(v))));
+      } else if (col.key === "ctrRecent") {
+        td.textContent = percent(value);
+      } else if (col.key === "posRecent") {
+        td.textContent = value ? value.toFixed(1) : "—";
+      } else {
+        td.textContent = int.format(value);
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+
+  table.append(thead, tbody);
+  container.appendChild(table);
+}
+
+/** The ten biggest gains and ten biggest losses by clicks. */
+function renderMovers(rows, win) {
+  const ranked = [...rows].sort((a, b) => b.clicksDelta - a.clicksDelta);
+  const gains = ranked.filter((r) => r.clicksDelta > 0).slice(0, 8);
+  const losses = ranked.filter((r) => r.clicksDelta < 0).slice(-8).reverse();
+  const picked = [...gains, ...losses];
+
+  document.getElementById("diff-movers-sub").textContent =
+    `Clicks gained and lost, ${win.recent.label} against ${win.prior.label}.`;
+
+  divergingBarChart(document.getElementById("diff-movers-chart"), {
+    rows: picked.map((r) => ({
+      name: r.url.replace(/^https?:\/\/[^/]+/, "") || "/",
+      value: r.clicksDelta,
+      detail: [
+        { label: win.recent.label, value: int.format(r.clicksRecent) },
+        { label: win.prior.label, value: int.format(r.clicksPrior) },
+        { label: "Impressions", value: int.format(r.imprRecent) },
+        { label: "Position", value: r.posRecent ? r.posRecent.toFixed(1) : "—" },
+      ],
+    })),
+    positiveColor: surfaceColor("--delta-up"),
+    negativeColor: surfaceColor("--delta-down"),
+    format: (v) => int.format(v),
+    labelWidth: 240,
+  });
+}
+
+for (const button of document.querySelectorAll("[data-diff]")) {
+  button.addEventListener("click", () => {
+    diffState.mode = button.dataset.diff;
+    for (const other of document.querySelectorAll("[data-diff]")) {
+      other.classList.toggle("is-active", other === button);
+    }
+    renderDifferential();
+  });
+}
+
+document.getElementById("diff-search").addEventListener("input", (event) => {
+  diffState.search = event.target.value;
+  renderDifferential();
+});
+
+/* Channel picker ----------------------------------------------------------
+ *
+ * Any subset of channels can be ticked. "Only Organic Search" and "everything
+ * except Direct" are the same question asked twice — which channels do you
+ * want — so one control answers both, rather than a dropdown listing every
+ * channel once to include and once to exclude.
+ *
+ * An empty selection means every channel: a report of nothing helps no one,
+ * and it keeps "all" and "none ticked" from being two indistinguishable
+ * states.
+ */
+function channelSummary() {
+  const picked = state.filters.channels;
+  const all = state.channelOptions.length;
+  if (!picked.length || (all && picked.length === all)) return "All channels";
+  if (picked.length === 1) return picked[0];
+  if (all && picked.length === all - 1) {
+    return `Except ${state.channelOptions.find((c) => !picked.includes(c))}`;
+  }
+  return `${picked.length} of ${all || picked.length} channels`;
+}
+
+function renderChannelPicker() {
+  const button = document.getElementById("filter-channel");
+  const list = document.getElementById("channel-list");
+  button.textContent = channelSummary();
+
+  const picked = new Set(state.filters.channels);
+  list.replaceChildren(
+    ...state.channelOptions.map((name) => {
+      const row = document.createElement("label");
+      row.className = "picker__row";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      // No selection means everything, so every box reads as ticked.
+      box.checked = picked.size === 0 || picked.has(name);
+      box.addEventListener("change", () => {
+        const current = new Set(
+          state.filters.channels.length ? state.filters.channels : state.channelOptions,
+        );
+        if (box.checked) current.add(name);
+        else current.delete(name);
+        commitChannels([...current]);
+      });
+      const text = document.createElement("span");
+      text.textContent = name;
+      row.append(box, text);
+      return row;
+    }),
+  );
+}
+
+function commitChannels(next) {
+  const all = state.channelOptions;
+  // Unticking the last box would ask for a report of nothing, so it falls back
+  // to everything — the same state as all ticked.
+  const chosen = next.length === 0 || next.length === all.length ? [] : next;
+  const changed = chosen.join("|") !== state.filters.channels.join("|");
+  state.filters.channels = chosen;
+  document.getElementById("filter-channel").textContent = channelSummary();
+  if (changed) refresh();
+}
+
+document.getElementById("filter-channel").addEventListener("click", () => {
+  const menu = document.getElementById("channel-menu");
+  const open = menu.hidden;
+  menu.hidden = !open;
+  document.getElementById("filter-channel").setAttribute("aria-expanded", String(open));
+});
+
+document.querySelector("[data-channel-all]").addEventListener("click", () => commitChannels([]));
+document.querySelector("[data-channel-none]").addEventListener("click", () => {
+  // "Clear" means start from one channel rather than none, since none is the
+  // same as all and would look like the button did nothing.
+  commitChannels(state.channelOptions.slice(0, 1));
+  renderChannelPicker();
+});
+
+document.addEventListener("click", (event) => {
+  const menu = document.getElementById("channel-menu");
+  if (menu.hidden) return;
+  if (event.target.closest(".picker")) return;
+  menu.hidden = true;
+  document.getElementById("filter-channel").setAttribute("aria-expanded", "false");
+});
+
+// Tabs. Each one keeps only the controls that reach its data: the day range
+// and dimension filters belong to Analytics, months to Sales, and the
+// Differential tab carries its own comparison switch.
 for (const button of document.querySelectorAll(".tabs__btn")) {
   button.addEventListener("click", () => {
     const tab = button.dataset.tab;
@@ -1576,28 +1931,34 @@ for (const button of document.querySelectorAll(".tabs__btn")) {
       if (active) other.setAttribute("aria-current", "page");
       else other.removeAttribute("aria-current");
     }
-    const sales = tab === "sales";
-    document.getElementById("tab-analytics").hidden = sales;
-    document.getElementById("tab-sales").hidden = !sales;
 
-    // Each tab keeps only the controls that reach its data: months and the
-    // comparison on Sales, the day range and dimension filters on Analytics.
-    for (const id of ["filter-country", "filter-device", "filter-channel"]) {
-      document.getElementById(id).closest(".field").hidden = sales;
+    document.getElementById("tab-analytics").hidden = tab !== "analytics";
+    document.getElementById("tab-sales").hidden = tab !== "sales";
+    document.getElementById("tab-diff").hidden = tab !== "diff";
+
+    const analytics = tab === "analytics";
+    for (const id of ["filter-country", "filter-device"]) {
+      document.getElementById(id).closest(".field").hidden = !analytics;
     }
-    document.getElementById("filter-status").hidden = sales;
-    document.getElementById("filter-clear").hidden = sales || !hasDimensionFilters();
-    document.getElementById("sales-months").hidden = !sales;
-    document.getElementById("custom-range").hidden = sales || !state.custom;
-    document.querySelector(".segmented").hidden = sales;
+    document.getElementById("filter-channel-field").hidden = !analytics;
+    document.getElementById("filter-status").hidden = !analytics;
+    document.getElementById("filter-clear").hidden = !analytics || !hasDimensionFilters();
+    document.getElementById("sales-months").hidden = tab !== "sales";
+    document.getElementById("custom-range").hidden = !analytics || !state.custom;
+    document.querySelector(".segmented").hidden = !analytics;
+    // Only Analytics and Sales share the comparison basis.
+    document.getElementById("comparison").closest(".field").hidden = tab === "diff";
+    document.querySelector(".filterbar").hidden = tab === "diff";
 
-    if (sales) {
+    // Charts measure their container, which has no width while hidden, so
+    // each tab draws after it becomes visible.
+    if (tab === "sales") {
       ensureSalesLoaded().then(() => {
         syncSalesControls();
-        // Charts measure their container, which has no width while hidden, so
-        // this has to draw after the tab is visible.
         renderSales();
       });
+    } else if (tab === "diff") {
+      ensureDifferentialLoaded().then(renderDifferential);
     } else {
       render();
     }

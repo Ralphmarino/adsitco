@@ -213,11 +213,12 @@ a site realistically sees rather than all ~250 ISO entries; an unmapped country
 is left out of the list on purpose, since including it would filter one source
 and silently not the other.
 
-The channel control offers each channel twice — once as "only this channel" and
-once as "everything except this channel" — so excluding Direct takes one
-selection rather than needing a second control. An exclusion becomes a
-`notExpression` in the GA4 query, so it narrows the data at the source like any
-other filter.
+Channels are **tick boxes**, not a single choice. "Only Organic Search" and
+"everything except Direct" are the same question asked twice — which channels do
+you want — so one control answers both. The selection goes to GA4 as an
+`inListFilter`, narrowing the data at the source. Unticking everything falls
+back to everything, since a report of nothing helps no one and would otherwise
+be indistinguishable from "all".
 
 One honest limitation, stated in the UI rather than hidden: **Search Console has
 no channel dimension**, so a channel selection narrows the Analytics panels only.
@@ -401,6 +402,39 @@ the whole history ships at once and every change of month, span or comparison
 after that is instant — no round trip. Keeping it out of the analytics snapshot
 also keeps three years of sales from being copied into every cached range and
 filter combination.
+
+## Differential tab
+
+Per-URL movement in Search Console, on two comparisons:
+
+- **Last 6 months vs the previous 6** — the default, matching the Diff. Analysis
+  sheet this replaces.
+- **Month over month** — the latest complete month against the one before.
+
+Site-wide totals come from their own dimensionless queries so they are exact
+rather than a sum of page rows. Six months against six needs no monthly
+breakdown, so the whole thing is six Search Console queries rather than one per
+month, cached for a day and warmed by the nightly job.
+
+**Biggest movers** is a diverging chart: gains right of the axis, losses left. A
+gain and a loss of the same size are opposite outcomes, so the side of the axis
+carries the direction, the colour reinforces it, and the label spells out the
+sign. Every delta in the table is signed for the same reason — red and green
+alone do not survive a colourblind reader or a printout.
+
+The table is sortable on every column and filterable by URL. It lists the URLs
+that moved most on either comparison; **the site has ~38,000 URLs**, which is a
+spreadsheet rather than a table anyone reads, so *Download all URLs (CSV)* exports
+every one in the same shape as the original sheet.
+
+Position deltas are signed so that **positive always means better** — a page
+moving from 8.5 to 5.1 reads as `+3.4`, not `−3.4`.
+
+Two things this does not have, deliberately: **AI/generative impressions**,
+because the original export took them from the Search Console UI and I could not
+verify the API exposes them — tell me the dimension and they go in; and the
+country, device and channel filters, which apply to the Analytics tab only.
+Differential figures are site-wide, matching the reference sheet.
 
 ## Branding
 

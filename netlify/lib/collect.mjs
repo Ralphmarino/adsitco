@@ -1,6 +1,6 @@
 import { daysAgo, shiftDays, shiftYears, daysBetween, isIsoDate } from "./dates.mjs";
 import { lookupCountry, countryOptions, DEFAULT_COUNTRY } from "./countries.mjs";
-import { parseChannelFilter } from "./filters.mjs";
+import { parseChannelFilter, channelSignature } from "./filters.mjs";
 import { fetchGa4Daily, collectGa4Breakdowns } from "./ga4.mjs";
 import { fetchGscDaily, collectGscBreakdowns } from "./gsc.mjs";
 
@@ -27,7 +27,7 @@ export const DEVICE_VALUES = ["desktop", "mobile", "tablet"];
  */
 export function normaliseFilters(params) {
   const device = String(params?.device || "").toLowerCase();
-  const channel = String(params?.channel || "").trim();
+  const channels = parseChannelFilter(params?.channels ?? params?.channel ?? "");
 
   // Country is three-state, so the absence of a parameter can mean "apply the
   // default" while still allowing an explicit "all". Without the sentinel there
@@ -40,9 +40,9 @@ export function normaliseFilters(params) {
 
   return {
     device: DEVICE_VALUES.includes(device) ? device : "",
-    // Channel names come from GA4's own list, so the only guard needed is a
-    // length cap to keep the cache key bounded.
-    channel: channel.length > 0 && channel.length <= 60 ? channel : "",
+    // Channel names come from GA4's own list; the cap keeps a hand-typed
+    // querystring from producing an unbounded cache key.
+    channels: channels.slice(0, 24).filter((c) => c.length <= 60),
     country,
   };
 }
@@ -71,20 +71,13 @@ export function hasUsableData(snapshot) {
   return Boolean(snapshot?.ga4?.daily?.length || snapshot?.gsc?.daily?.length);
 }
 
-/**
- * A channel selection is either "only this one" or "everything but this one".
- * Re-exported so callers importing the collector keep working.
- */
 export { parseChannelFilter };
 
 export function filterSignature(filters) {
   const parts = [];
   if (filters.device) parts.push(`d:${filters.device}`);
-  const channel = parseChannelFilter(filters.channel);
-  if (channel) {
-    const slug = channel.value.toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    parts.push(`c:${channel.exclude ? "not-" : ""}${slug}`);
-  }
+  const channels = channelSignature(filters.channels ?? []);
+  if (channels) parts.push(`c:${channels}`);
   if (filters.country) parts.push(`g:${filters.country}`);
   return parts.length ? parts.join("_") : "all";
 }

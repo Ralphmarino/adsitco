@@ -1,3 +1,4 @@
+import { collectDifferential } from "../lib/differential.mjs";
 import {
   collectSnapshot,
   resolveRange,
@@ -52,12 +53,27 @@ export default async () => {
     }
   }
 
+  // The differential view is monthly, so it changes far less often than the
+  // daily report — but warming it here keeps the tab from paying for six
+  // Search Console queries on someone's first visit of the day.
+  try {
+    const differential = await collectDifferential({ span: 6 });
+    if (differential.rows.length) {
+      await writeSnapshot("differential-6mo", differential, "all");
+      results.push({ view: "differential-6mo", ok: true, urls: differential.urlCount });
+    } else {
+      results.push({ view: "differential-6mo", ok: false, error: "no rows returned" });
+    }
+  } catch (err) {
+    results.push({ view: "differential-6mo", ok: false, error: err.message });
+  }
+
   const failed = results.filter((r) => !r.ok);
   console.log(
     JSON.stringify({ event: "report_refresh", at: new Date().toISOString(), results }),
   );
 
-  if (failed.length === SUPPORTED_WINDOWS.length) {
+  if (failed.filter((r) => r.days).length === SUPPORTED_WINDOWS.length) {
     // Netlify surfaces a non-2xx scheduled run as a failure, which is what we
     // want when nothing at all could be collected.
     return new Response(JSON.stringify({ ok: false, results }), {

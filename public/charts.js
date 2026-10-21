@@ -377,10 +377,120 @@ export function columnChart(container, { groups, series, format }) {
   container.appendChild(svg);
 }
 
+/**
+ * Signed change as bars either side of a zero line.
+ *
+ * A gain and a loss of the same size are opposite outcomes, so they must not
+ * be the same bar in two colours — that leaves the direction carried by hue
+ * alone, which does not survive a colourblind reader or a printout. Here the
+ * side of the axis carries it, the colour reinforces it, and the label spells
+ * it out.
+ */
+export function divergingBarChart(container, { rows, positiveColor, negativeColor, format, labelWidth = 200 }) {
+  if (!rows.length) {
+    emptyState(container, "Nothing moved in this range.");
+    return;
+  }
+
+  container.replaceChildren();
+
+  const width = Math.max(container.clientWidth || 640, 320);
+  const rowHeight = 28;
+  const barHeight = 18;
+  const valueWidth = 72;
+  const height = rows.length * rowHeight + 24;
+  // A gutter on each side: the label of a full-length bar needs room beyond
+  // the bar on its own side, or it lands back on top of the URL column.
+  const plotW = Math.max(width - labelWidth - valueWidth * 2, 80);
+  const axis = labelWidth + valueWidth + plotW / 2;
+  const max = Math.max(...rows.map((r) => Math.abs(r.value)), 1);
+  const scale = (v) => (Math.abs(v) / max) * (plotW / 2);
+
+  const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width, height, role: "img" });
+  // Appended before the labels are drawn: getComputedTextLength measures zero
+  // on a detached element, which silently skips every truncation below.
+  container.appendChild(svg);
+
+  rows.forEach((row, i) => {
+    const y = i * rowHeight + 14;
+    const w = Math.max(scale(row.value), row.value ? 2 : 0);
+    const negative = row.value < 0;
+
+    const name = el("text", {
+      x: 0,
+      y: y + barHeight / 2 + 4,
+      fill: token("--text-secondary"),
+      "font-size": 12,
+      "font-family": "inherit",
+    }, svg);
+    name.textContent = row.name;
+    // A URL is told apart by its tail, not its stem, so it loses characters
+    // from the front.
+    if (name.getComputedTextLength) {
+      let text = row.name;
+      while (text.length > 6 && name.getComputedTextLength() > labelWidth - 12) {
+        text = text.slice(1);
+        name.textContent = `…${text}`;
+      }
+    }
+
+    if (w > 0) {
+      el("path", {
+        d: negative
+          ? barPath(axis - w, y, w, barHeight, 4, "left")
+          : barPath(axis, y, w, barHeight, 4, "right"),
+        fill: negative ? negativeColor : positiveColor,
+      }, svg);
+    }
+
+    const label = el("text", {
+      x: negative ? axis - w - 8 : axis + w + 8,
+      y: y + barHeight / 2 + 4,
+      "text-anchor": negative ? "end" : "start",
+      fill: token("--text-secondary"),
+      "font-size": 11.5,
+      "font-weight": 600,
+      "font-family": "inherit",
+    }, svg);
+    label.textContent = `${negative ? "−" : "+"}${format(Math.abs(row.value))}`;
+
+    const hit = el("rect", { x: 0, y, width, height: barHeight, fill: "transparent" }, svg);
+    hit.addEventListener("mousemove", (event) => {
+      showTooltip(
+        `<div class="tooltip__date">${row.name}</div>` +
+          (row.detail || [])
+            .map(
+              (d) =>
+                `<div class="tooltip__row"><span class="tooltip__key">${d.label}</span><span class="tooltip__value">${d.value}</span></div>`,
+            )
+            .join(""),
+        event,
+      );
+    });
+    hit.addEventListener("mouseleave", hideTooltip);
+  });
+
+  el("line", {
+    x1: axis, x2: axis, y1: 6, y2: height - 10,
+    stroke: token("--axis"), "stroke-width": 1,
+  }, svg);
+}
+
 /** Path for a bar with only its data-end rounded; it stays square at the baseline. */
 function barPath(x, y, w, h, r, end = "right") {
   const radius = Math.min(r, w / 2, h);
   if (radius <= 0) return `M ${x} ${y} h ${w} v ${h} h ${-w} Z`;
+  if (end === "left") {
+    return [
+      `M ${x + w} ${y}`,
+      `H ${x + radius}`,
+      `a ${radius} ${radius} 0 0 0 ${-radius} ${radius}`,
+      `v ${h - radius * 2}`,
+      `a ${radius} ${radius} 0 0 0 ${radius} ${radius}`,
+      `H ${x + w}`,
+      "Z",
+    ].join(" ");
+  }
   if (end === "top") {
     return [
       `M ${x} ${y + h}`,
@@ -404,7 +514,7 @@ function barPath(x, y, w, h, r, end = "right") {
 }
 
 /** Horizontal bars, sorted, one colour — the category is identity, not a series. */
-export function barChart(container, { rows, color, format, labelWidth = 128 }) {
+export function barChart(container, { rows, color, colorFor, format, labelWidth = 128 }) {
   if (!rows.length) {
     emptyState(container, "No data in this range yet.");
     return;
@@ -421,6 +531,8 @@ export function barChart(container, { rows, color, format, labelWidth = 128 }) {
   const max = Math.max(...rows.map((r) => r.value), 1);
 
   const svg = el("svg", { viewBox: `0 0 ${width} ${height}`, width, height, role: "img" });
+  // Must be in the document before any label is measured; see divergingBarChart.
+  container.appendChild(svg);
 
   rows.forEach((row, i) => {
     const y = i * rowHeight + 3;
@@ -447,7 +559,7 @@ export function barChart(container, { rows, color, format, labelWidth = 128 }) {
     if (w > 0) {
       el("path", {
         d: barPath(labelWidth, y, w, barHeight, 4),
-        fill: color,
+        fill: colorFor ? colorFor(row, i) : color,
       }, svg);
     }
 
@@ -482,8 +594,6 @@ export function barChart(container, { rows, color, format, labelWidth = 128 }) {
     });
     hit.addEventListener("mouseleave", hideTooltip);
   });
-
-  container.appendChild(svg);
 }
 
 /** Table view — also the accessibility fallback for every chart. */
