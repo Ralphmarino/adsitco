@@ -417,6 +417,19 @@ body {
   border: 1px solid var(--border);
 }
 
+/* A source the report could not read is not a footnote. The left rule carries
+   the weight so the text stays at body contrast rather than being tinted into
+   something harder to read than the note it is warning about. */
+.notice--warn {
+  border-left: 3px solid var(--delta-down);
+}
+
+/* A missing value, distinguished from a zero. The em dash alone reads as
+   "nothing here"; this says "not known yet" without shouting. */
+.cell-unknown {
+  color: var(--muted);
+}
+
 /* Filter bar ------------------------------------------------------------- */
 
 .filterbar {

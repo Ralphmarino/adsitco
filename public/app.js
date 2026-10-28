@@ -1563,18 +1563,22 @@ for (const chip of document.querySelectorAll(".chip")) {
  * Which posts are earning search traffic, when each was last touched, and
  * which ones are worth refreshing next.
  *
- * The dates maintain themselves: a nightly job reads the site's post sitemap,
- * which the CMS regenerates whenever a post changes, so "days since update"
- * stays true without anyone keeping a column up to date. Publication dates are
- * not in the sitemap and never change, so they are fetched from each post once
- * and kept.
+ * The dates maintain themselves: a nightly job asks WordPress for every
+ * tracked post's published and modified date, so "days since update" stays
+ * true without anyone keeping a column up to date. The sitemap and the posts'
+ * own pages are fallbacks, and data/blog-dates.csv overrides all three.
+ *
+ * Which source answered is shown rather than assumed. The first deploy had
+ * every request refused by the site's firewall and the tab could only say "no
+ * dates", so the status line now names the source and the stale column says
+ * where its value came from.
  */
 
 async function ensureBlogLoaded() {
   if (blogState.data || blogState.loading) return blogState.loading;
   const status = document.getElementById("blog-status");
   status.hidden = false;
-  status.textContent = "Reading the sitemap and Search Console…";
+  status.textContent = "Reading the blog and Search Console…";
 
   const headers = {};
   if (state.password) headers["x-report-password"] = state.password;
@@ -1620,19 +1624,33 @@ function renderBlog() {
 
   const t = data.totals ?? {};
   const notes = [];
-  if (data.sitemapError) notes.push(`Sitemap unreadable (${data.sitemapError}); dates are from the last good read.`);
-  notes.push(
-    `${t.tracked} posts tracked from ${t.sitemapEntries?.toLocaleString() ?? "?"} sitemap entries — ` +
-      `${t.filteredOut?.toLocaleString() ?? 0} generated pages filtered out.`,
-  );
-  if (t.new) notes.push(`${t.new} in the sitemap but not in the curated list.`);
-  if (t.missingFromSitemap) notes.push(`${t.missingFromSitemap} curated post(s) no longer in the sitemap.`);
-  if (data.backfill?.remaining) {
-    notes.push(`${data.backfill.remaining} publication date(s) still to fetch; the nightly job fills them a few at a time.`);
+
+  // What the live site actually answered, first — a count of tracked posts is
+  // meaningless if none of their dates could be read.
+  const answered = (data.sources ?? []).filter((s) => s.ok && (s.resolved ?? 0) > 0);
+  if (data.blocked) {
+    notes.push("⚠ The site refused every date request, so the dates below are the last known ones.");
+  } else if (answered.length) {
+    notes.push(`Dates from ${answered.map((s) => s.label).join(" and ")}.`);
   }
-  for (const w of data.warnings ?? []) notes.push(w);
+
+  notes.push(
+    `${int.format(t.tracked ?? 0)} posts tracked` +
+      (t.filteredOut ? ` — ${int.format(t.filteredOut)} generated pages filtered out` : "") +
+      ".",
+  );
+  if (t.new) notes.push(`${t.new} found on the site but not in the curated list.`);
+  // Only a sitemap that was read can say a post has left it.
+  if (t.missingFromSitemap) notes.push(`${t.missingFromSitemap} tracked post(s) no longer in the sitemap.`);
+
+  // Server warnings already carry the specific cause and the fix; don't repeat
+  // a note the server phrased better.
+  for (const w of data.warnings ?? []) if (!notes.includes(w)) notes.push(w);
+  if (data.blocked) notes.push("Open /api/blog?diagnose=1 to see what each address returned.");
+
   status.hidden = false;
   status.textContent = notes.join(" ");
+  status.classList.toggle("notice--warn", Boolean(data.blocked));
 
   document.getElementById("blog-range").textContent = data.windows
     ? `performance: ${data.windows.recent.label} vs ${data.windows.prior.label}`
@@ -1680,8 +1698,12 @@ function renderBlog() {
   // individual post is.
   const counts = new Map(AGE_BANDS.map((b) => [b.band, 0]));
   for (const r of rows) counts.set(r.freshness.band, (counts.get(r.freshness.band) ?? 0) + 1);
+  const modifiedFrom = answered.length
+    ? answered.map((s) => s.label).join(" and ")
+    : "the last successful read";
   document.getElementById("blog-age-sub").textContent =
-    "Last-modified dates come from the site's post sitemap and refresh nightly.";
+    `Last-updated dates come from ${modifiedFrom} and refresh nightly.` +
+    (t.withModified != null && t.tracked ? ` ${t.withModified} of ${t.tracked} posts have one.` : "");
   barChart(document.getElementById("blog-age-chart"), {
     rows: AGE_BANDS.filter((b) => counts.get(b.band)).map((b) => ({
       name: b.label,
@@ -1779,8 +1801,26 @@ function renderBlogTable(container, rows) {
       tr.appendChild(td);
       return td;
     };
-    cell(r.published ? prettyDate(r.published) : "—");
-    cell(r.lastmod ? prettyDate(r.lastmod) : "—");
+    // A date is only as good as where it came from, and these come from four
+    // different places. The cell shows the date; the tooltip shows the source,
+    // so "—" and "hand-entered" are distinguishable without another column.
+    const SOURCE_LABEL = {
+      manual: "entered by hand in data/blog-dates.csv",
+      wp: "the WordPress API",
+      sitemap: "the sitemap",
+      html: "the post's page",
+      stored: "an earlier run",
+    };
+    const dated = (value, source, kind) => {
+      const td = cell(value ? prettyDate(value) : "—");
+      td.title = value
+        ? `${kind} date from ${SOURCE_LABEL[source] ?? "an unknown source"}`
+        : `No ${kind.toLowerCase()} date found — add one to data/blog-dates.csv`;
+      if (!value) td.classList.add("cell-unknown");
+      return td;
+    };
+    dated(r.published, r.publishedSource, "Published");
+    dated(r.lastmod, r.modifiedSource, "Last updated");
     cell(monthsAgo(r.daysSinceUpdate));
     cell(int.format(r.clicks));
 

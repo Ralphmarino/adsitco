@@ -1,0 +1,11 @@
+# Hand-entered dates. Highest precedence — anything here wins over the
+# WordPress API, the sitemap and the post's own HTML, and is never re-fetched.
+#
+# Use it for the posts the live site cannot tell us about: a post migrated from
+# another CMS whose `date` is the import date, a correction, or anything at all
+# while the site is blocking the report's requests.
+#
+# One row per post. Both date columns are optional — fill in either or both.
+# Dates may be YYYY-MM-DD, M/D/YYYY, or "Oct 22, 2025".
+url,published,modified
+https://www.adsitco.com/blog/common-mercedes-problems-solutions/,,2025-10-22

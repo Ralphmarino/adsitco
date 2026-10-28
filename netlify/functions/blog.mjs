@@ -1,5 +1,5 @@
 import { checkViewerAuth, checkRefreshAuth, json } from "../lib/auth.mjs";
-import { collectBlogTracker } from "../lib/blog.mjs";
+import { collectBlogTracker, diagnoseBlogSources } from "../lib/blog.mjs";
 import { readSnapshot, writeSnapshot, ageInMinutes } from "../lib/store.mjs";
 
 // The sitemap changes when a post is published or edited, so a day-old view is
@@ -13,6 +13,19 @@ export default async (req) => {
   }
 
   const url = new URL(req.url);
+
+  // Diagnostics first: it reads nothing from the cache and changes no state,
+  // so it answers even when collection is failing outright. That is the whole
+  // point of it — "no dates" needed to become a specific address and a status
+  // code without a redeploy.
+  if (url.searchParams.get("diagnose") === "1") {
+    try {
+      return json(await diagnoseBlogSources());
+    } catch (err) {
+      return json({ error: "diagnose_failed", message: err.message }, 502);
+    }
+  }
+
   const forceRequested = url.searchParams.get("force") === "1";
   const force = forceRequested && checkRefreshAuth(req);
   if (forceRequested && !force) {
@@ -25,9 +38,11 @@ export default async (req) => {
   }
 
   try {
-    // A read-path refresh backfills fewer publication dates than the nightly
-    // job: someone opening the tab should not wait on dozens of page fetches.
-    const data = await collectBlogTracker({ backfillLimit: force ? 25 : 8 });
+    // The WordPress API covers every tracked post in three requests, so the
+    // per-post scrape is now a fallback for the handful it does not know. A
+    // read still does fewer than the nightly job: someone opening the tab
+    // should not wait on dozens of page fetches.
+    const data = await collectBlogTracker({ scrapeLimit: force ? 25 : 8 });
     if (data.rows.length) await writeSnapshot(CACHE_KEY, data, "all");
     return json({ ...data, cache: force ? "forced" : "miss" });
   } catch (err) {

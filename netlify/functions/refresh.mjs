@@ -70,18 +70,25 @@ export default async () => {
   }
 
   // The blog tracker is the piece that has to run on a schedule to be worth
-  // anything: it is what notices a post's lastmod moved, and it backfills
-  // publication dates a few at a time so a first run does not hammer the site.
+  // anything: it is what notices a post's modified date moved. The dates
+  // themselves come from the WordPress API in a few requests; the per-post
+  // scrape is a capped fallback so a run does not hammer the site.
   try {
-    const blog = await collectBlogTracker({ backfillLimit: 25 });
+    const blog = await collectBlogTracker({ scrapeLimit: 25 });
     await writeSnapshot("blog-tracker", blog, "all");
     results.push({
       view: "blog-tracker",
-      ok: true,
+      // A run that reached no date source is not a success. Logging it as one
+      // is how a blocked site went unnoticed until someone opened the tab.
+      ok: !blog.blocked,
+      blocked: blog.blocked,
       tracked: blog.totals.tracked,
       newPosts: blog.totals.new,
-      publishedBackfilled: blog.backfill.filled,
-      publishedRemaining: blog.backfill.remaining,
+      withPublished: blog.totals.withPublished,
+      withModified: blog.totals.withModified,
+      dateSources: blog.dateSources,
+      sources: blog.sources.map((s) => ({ id: s.id, ok: s.ok, status: s.status ?? null, resolved: s.resolved ?? null })),
+      warnings: blog.warnings,
     });
   } catch (err) {
     results.push({ view: "blog-tracker", ok: false, error: err.message });
