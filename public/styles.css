@@ -596,8 +596,70 @@ body {
   line-height: 1.6;
 }
 
-.table-view--tall {
-  max-height: 620px;
+/* Fill the window instead of a flat 620px, which showed three rows of a
+   150-row table. A floor so a short viewport still gets a usable list, and a
+   ceiling so a very tall one does not strand the header off-screen.
+
+   Written with both class names for specificity: `.table-view` sets
+   `max-height: 420px` further down this file, and at equal specificity the
+   later rule wins — which is why the modifier was doing nothing at all. */
+.table-view.table-view--tall {
+  max-height: clamp(520px, calc(100vh - 190px), 1400px);
+}
+
+/* Fixed layout for the wide tables.
+
+   With auto layout the longest cell sets the column: one row reading "Clicks
+   down 58% vs the previous 90 days · and 76% vs last year" on a single line
+   widened the Health column until the dates and age were off the right edge,
+   and squeezed the title into a four-line wrap. Fixed layout gives every
+   column the share it is worth, and the long text wraps inside it. */
+.table--fixed {
+  table-layout: fixed;
+  /* Below this the columns are too narrow to read, so scroll horizontally
+     rather than crush them. */
+  min-width: 1080px;
+}
+
+/* Cells default to `white-space: nowrap`, which is right for figures and was
+   the actual cause of the blow-out: the health reason could not wrap, so it
+   set the column width. Columns that carry sentences opt out. */
+.table--fixed tbody td.cell-text,
+.table--fixed thead th.cell-text {
+  white-space: normal;
+  text-align: left;
+  font-variant-numeric: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The first-child rule caps the title at 320px, which fights the column width
+   the colgroup just assigned it. */
+.table--fixed tbody td:first-child {
+  max-width: none;
+}
+
+/* Row height is the other half of "only three posts fit on screen".
+
+   adsitco's titles run long — "Troubleshooting Mercedes-Benz Issues: The
+   Ultimate Guide to OBD-II Codes Mercedes and Mercedes OBD Code List" — and
+   with the slug breaking across three more lines a single row ran past 200px.
+   Two lines of title and one of slug keeps rows scannable; the full title is
+   on the link's tooltip and the full URL is the link itself, so nothing is
+   lost, only folded. */
+.table--fixed .title-cell a {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.table--fixed .title-cell .cell-sub {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: normal;
 }
 
 th.is-sortable {
@@ -805,11 +867,22 @@ th .sort-arrow {
   overflow-wrap: anywhere;
 }
 
+/* Reading width for the chart-led tabs; table-led tabs widen it below. The
+   value is a variable so the page and the footer under it cannot drift. */
+:root {
+  --page-max: 1240px;
+}
+
+body[data-tab="blog"],
+body[data-tab="diff"] {
+  --page-max: 1760px;
+}
+
 .page {
   display: grid;
   gap: 18px;
   padding: 22px clamp(16px, 4vw, 40px) 40px;
-  max-width: 1240px;
+  max-width: var(--page-max);
   margin: 0 auto;
 }
 
@@ -1101,7 +1174,7 @@ tbody tr:hover {
   padding: 16px clamp(16px, 4vw, 40px) 30px;
   color: var(--text-muted);
   font-size: 12.5px;
-  max-width: 1240px;
+  max-width: var(--page-max);
   margin: 0 auto;
   width: 100%;
 }

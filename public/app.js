@@ -1952,23 +1952,46 @@ function renderBlogTable(container, rows) {
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   const showVerdict = rows.some((r) => r.audit?.verdict);
+
+  // The third number is the column's share of the table. Written as weights
+  // rather than percentages so adding or removing the Verdict column
+  // redistributes the rest instead of leaving the row short.
   const COLUMNS = [
-    ["Post", "The post, its slug, and what the audit and the format check found"],
-    ["Health", "From the last 90 days against the previous 90 and the same 90 last year"],
-    ...(showVerdict ? [["Verdict", "From the audit records. The tracker reads these; it never assigns them."]] : []),
-    ["Refresh", "Priority orders the queue. “Due” is the spec's rule: stale past the window and worth the effort."],
-    ["Published", ""],
-    ["Last updated", "Prefers the hand-recorded substantive date; otherwise the WordPress save date"],
-    ["Age", "Since the date in the previous column"],
-    ["Clicks", "Last 6 months"],
-    ["Δ Clicks", "vs the previous 6 months"],
-    ["Impr.", "Last 6 months"],
-    ["Pos.", "Average position, last 6 months"],
+    // Post gets the most because it is the column people read, and because a
+    // narrow one wraps the title to four lines and makes every row tall —
+    // which is the other half of "only three posts fit on screen".
+    ["Post", "The post, its slug, and what the audit and the format check found", 27],
+    ["Health", "From the last 90 days against the previous 90 and the same 90 last year", 15],
+    ...(showVerdict
+      ? [["Verdict", "From the audit records. The tracker reads these; it never assigns them.", 11]]
+      : []),
+    ["Refresh", "Priority orders the queue. “Due” is the spec's rule: stale past the window and worth the effort.", 12],
+    ["Published", "When the post first went live", 8],
+    ["Last updated", "Prefers the hand-recorded substantive date; otherwise the WordPress save date", 9],
+    ["Age", "Since the date in the previous column", 5],
+    ["Clicks", "Last 6 months", 6],
+    ["Δ Clicks", "vs the previous 6 months", 6],
+    ["Impr.", "Last 6 months", 7],
+    ["Pos.", "Average position, last 6 months", 5],
   ];
+
+  table.className = "table--fixed";
+  const total = COLUMNS.reduce((sum, [, , weight]) => sum + weight, 0);
+  const colgroup = document.createElement("colgroup");
+  for (const [, , weight] of COLUMNS) {
+    const col = document.createElement("col");
+    col.style.width = `${((weight / total) * 100).toFixed(2)}%`;
+    colgroup.appendChild(col);
+  }
+  table.appendChild(colgroup);
+
+  // The first four columns carry sentences; the rest carry figures.
+  const TEXT_COLUMNS = new Set(["Post", "Health", "Verdict", "Refresh"]);
   for (const [label, hint] of COLUMNS) {
     const th = document.createElement("th");
     th.textContent = label;
     th.scope = "col";
+    if (TEXT_COLUMNS.has(label)) th.className = "cell-text";
     if (hint) th.title = hint;
     headRow.appendChild(th);
   }
@@ -1979,15 +2002,18 @@ function renderBlogTable(container, rows) {
     const tr = document.createElement("tr");
 
     const title = document.createElement("td");
-    title.className = "title-cell";
+    title.className = "title-cell cell-text";
     const link = document.createElement("a");
     link.href = r.url;
     link.target = "_blank";
     link.rel = "noreferrer noopener";
     link.textContent = r.title || r.url.replace(/^https?:\/\/[^/]+/, "");
+    // The cell clamps the title to two lines, so the full one lives here.
+    link.title = r.title || r.url;
     const sub = document.createElement("span");
     sub.className = "cell-sub";
     sub.textContent = r.url.replace(/^https?:\/\/[^/]+/, "");
+    sub.title = r.url;
     title.append(link, sub);
 
     // Everything that is a property of the post rather than a measurement
@@ -2028,18 +2054,30 @@ function renderBlogTable(container, rows) {
     if (flags.length) {
       const wrap = document.createElement("span");
       wrap.className = "flags";
-      for (const f of flags) {
+      // Bounded, so one heavily-flagged post cannot make every row tall. The
+      // list is already in priority order — discovery, then the audit's own
+      // fields, then conformance, then the vetoes — so the overflow is the
+      // least urgent end of it, and it is still reachable on the tooltip.
+      const SHOWN = 5;
+      for (const f of flags.slice(0, SHOWN)) {
         const el = document.createElement("span");
         el.className = `flag${f.kind ? ` flag--${f.kind}` : ""}`;
         el.textContent = f.text;
         wrap.appendChild(el);
+      }
+      if (flags.length > SHOWN) {
+        const more = document.createElement("span");
+        more.className = "flag";
+        more.textContent = `+${flags.length - SHOWN}`;
+        more.title = flags.slice(SHOWN).map((f) => f.text).join(" · ");
+        wrap.appendChild(more);
       }
       title.appendChild(wrap);
     }
     tr.appendChild(title);
 
     const healthCell = document.createElement("td");
-    healthCell.style.textAlign = "left";
+    healthCell.className = "cell-text";
     const healthBadge = document.createElement("span");
     healthBadge.className = `badge badge--h-${r.health}`;
     healthBadge.textContent = r.healthLabel;
@@ -2051,7 +2089,7 @@ function renderBlogTable(container, rows) {
 
     if (showVerdict) {
       const verdictCell = document.createElement("td");
-      verdictCell.style.textAlign = "left";
+      verdictCell.className = "cell-text";
       if (r.audit?.verdict) {
         const v = document.createElement("span");
         v.className = `badge badge--v-${r.audit.verdict}`;
@@ -2074,7 +2112,7 @@ function renderBlogTable(container, rows) {
     }
 
     const priority = document.createElement("td");
-    priority.style.textAlign = "left";
+    priority.className = "cell-text";
     const badge = document.createElement("span");
     badge.className = `badge badge--${r.priority.tier === "none" ? "none" : r.priority.tier}`;
     badge.textContent =
@@ -2666,6 +2704,12 @@ for (const button of document.querySelectorAll(".tabs__btn")) {
     document.getElementById("tab-sales").hidden = tab !== "sales";
     document.getElementById("tab-diff").hidden = tab !== "diff";
     document.getElementById("tab-blog").hidden = tab !== "blog";
+
+    // The reading-width cap suits the chart-led tabs and starves the
+    // table-led ones: at 1240px the blog tracker's eleven columns pushed the
+    // dates and age off the right edge while the title wrapped to four lines.
+    // Set on <body> so the footer stays in step with the page above it.
+    document.body.dataset.tab = tab;
 
     const analytics = tab === "analytics";
     for (const id of ["filter-country", "filter-device"]) {
