@@ -502,6 +502,16 @@
           <input class="field__control field__control--search" id="blog-search" type="search"
                  placeholder="Filter posts…" aria-label="Filter posts" />
           <a class="btn" id="blog-csv" href="/api/blog?format=csv" download>Download all fields (CSV)</a>
+          <button class="btn" id="blog-check" type="button">Check connection</button>
+        </div>
+
+        <!-- What each date source answered, on demand. The endpoint behind
+             this needs the report password, so it cannot simply be opened in
+             the address bar. -->
+        <div class="diagnostics" id="blog-diagnostics" hidden>
+          <p class="diagnostics__title" id="blog-diagnostics-title">Date sources</p>
+          <ul class="diagnostics__list" id="blog-diagnostics-list"></ul>
+          <p class="diagnostics__note" id="blog-diagnostics-next"></p>
         </div>
 
         <!-- Health and verdict are different questions — one is computed from

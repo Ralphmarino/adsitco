@@ -1,5 +1,5 @@
 import { checkViewerAuth, checkRefreshAuth, json } from "../lib/auth.mjs";
-import { collectBlogTracker, diagnoseBlogSources, blogCsv } from "../lib/blog.mjs";
+import { collectBlogTracker, diagnoseBlogSources, blogCsv, BLOG_SCHEMA } from "../lib/blog.mjs";
 import { readSnapshot, writeSnapshot, ageInMinutes } from "../lib/store.mjs";
 
 // The sitemap changes when a post is published or edited, so a day-old view is
@@ -43,7 +43,11 @@ export default async (req) => {
     });
 
   const cached = await readSnapshot(CACHE_KEY, "all");
-  if (!force && cached && ageInMinutes(cached) <= STALE_AFTER_MINUTES) {
+  // A snapshot from before the payload gained a field is worse than no
+  // snapshot: the page renders it and every newer field reads as a zero.
+  // Blobs outlive deploys, so this is the only thing that catches it.
+  const current = cached?.schema === BLOG_SCHEMA;
+  if (!force && current && ageInMinutes(cached) <= STALE_AFTER_MINUTES) {
     return wantsCsv ? asCsv(cached) : json({ ...cached, cache: "hit" });
   }
 
@@ -56,7 +60,10 @@ export default async (req) => {
     if (data.rows.length) await writeSnapshot(CACHE_KEY, data, "all");
     return wantsCsv ? asCsv(data) : json({ ...data, cache: force ? "forced" : "miss" });
   } catch (err) {
-    if (cached) {
+    // Falling back to a snapshot of the wrong shape would reintroduce the
+    // half-populated tab, so an outdated one is not served even as a last
+    // resort — the error says what happened instead.
+    if (current) {
       if (wantsCsv) return asCsv(cached);
       return json({
         ...cached,

@@ -2167,6 +2167,72 @@ document.getElementById("blog-search").addEventListener("input", (event) => {
 });
 
 /**
+ * "Check connection" — what each date source answers, right now.
+ *
+ * This exists because the diagnostic endpoint sits behind the report password
+ * and so cannot be opened in the address bar, and because "no dates" is not a
+ * diagnosable report. It names the address tried, the status it returned and
+ * the fix, which tells a firewall rule apart from a disabled REST route
+ * without a redeploy.
+ */
+document.getElementById("blog-check").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const panel = document.getElementById("blog-diagnostics");
+  const list = document.getElementById("blog-diagnostics-list");
+  const next = document.getElementById("blog-diagnostics-next");
+  const original = button.textContent;
+
+  button.disabled = true;
+  button.textContent = "Checking…";
+  panel.hidden = false;
+  list.replaceChildren();
+  next.textContent = "Asking the site…";
+
+  const line = (ok, name, detail) => {
+    const li = document.createElement("li");
+    li.className = "diagnostics__item";
+    const mark = document.createElement("span");
+    mark.className = `diagnostics__mark diagnostics__mark--${ok ? "ok" : "bad"}`;
+    mark.textContent = ok ? "✓" : "✕";
+    const label = document.createElement("span");
+    label.className = "diagnostics__name";
+    label.textContent = name;
+    const text = document.createElement("span");
+    text.textContent = detail;
+    li.append(mark, label, text);
+    list.appendChild(li);
+  };
+
+  try {
+    const headers = {};
+    if (state.password) headers["x-report-password"] = state.password;
+    const res = await fetch("/api/blog?diagnose=1", { headers });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || `request failed (${res.status})`);
+
+    for (const source of data.sources ?? []) {
+      const detail = source.ok
+        ? `${source.url} — ${source.resolved ?? 0} result(s)${source.requests ? ` in ${source.requests} request(s)` : ""}`
+        : `${source.url} — ${source.error}${source.hint ? `. ${source.hint}` : ""}`;
+      line(source.ok, source.label, detail);
+    }
+    // Addresses that were never reached are worth showing too: a sitemap found
+    // at the second candidate means the first one is not the problem.
+    for (const attempt of data.sources?.find((s) => s.id === "sitemap")?.attempts ?? []) {
+      if (attempt.ok) continue;
+      line(false, "  tried", `${attempt.url} — ${attempt.error}`);
+    }
+    next.textContent = data.nextStep ?? "";
+  } catch (err) {
+    line(false, "Check failed", err.message);
+    next.textContent = "";
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
+});
+
+/**
  * CSV downloads, fetched rather than navigated to.
  *
  * A plain `<a download>` cannot carry the report password, so once

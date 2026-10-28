@@ -33,6 +33,23 @@ import { readSnapshot, writeSnapshot } from "./store.mjs";
 
 const STATE_KEY = "blog-state";
 
+/**
+ * Shape version of a cached /api/blog payload.
+ *
+ * Netlify Blobs outlive a deploy, and the read path serves anything under 12
+ * hours old — so new UI reading an old snapshot renders a half-populated tab
+ * where every field added since looks like a zero. That is exactly what the
+ * audit columns did on their first deploy: "Due a refresh 0", "Audited 0/108",
+ * an empty health chart, all from a snapshot collected before those fields
+ * existed.
+ *
+ * Bump this whenever a field is added to the returned payload. A cached
+ * snapshot that does not match is treated as a miss and recollected, so a
+ * deploy that changes the shape fixes itself on the next page load instead of
+ * waiting out the TTL or needing a manual force.
+ */
+export const BLOG_SCHEMA = 3;
+
 const canonical = (url) => String(url ?? "").trim().replace(/\/+$/, "").toLowerCase();
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -616,6 +633,7 @@ export async function collectBlogTracker({ scrapeLimit = 8, includeContent = fal
   }
 
   return {
+    schema: BLOG_SCHEMA,
     generatedAt: new Date().toISOString(),
     siteOrigin: SITE_ORIGIN,
     sources: live.sources,

@@ -512,8 +512,12 @@ condition it describes rather than an error:
 - `robots.txt` is read for the sitemap address before any path is guessed at,
   then the usual paths are tried in turn — `/post-sitemap.xml` is a Yoast
   convention and WordPress core publishes `/wp-sitemap.xml`.
-- **`/api/blog?diagnose=1`** names every address tried and what each returned.
-  It reads no cached state, so it answers while collection is failing.
+- **Check connection**, in the tab, names every address tried and what each
+  returned — a firewall rule, a disabled REST route and a renamed sitemap are
+  told apart in one look. It calls `/api/blog?diagnose=1`, which reads no
+  cached state and so answers while collection is failing. There is a button
+  for it because that endpoint sits behind the report password and cannot be
+  opened in the address bar.
 - The tab keeps the last known dates, says plainly that the site refused, and
   carries the fix. The nightly job logs a refused run as a failure rather than
   a success.
@@ -694,6 +698,15 @@ site-wide, matching the Differential tab.
 `/api/blog`, cached for 12 hours and warmed by the nightly job, which is also
 the run that reads post content for conformance. Everything else is computed on
 the fly from one payload, so every view, filter and sort is instant.
+
+The payload carries a **schema version**, and a cached snapshot that does not
+match it is recollected rather than served. Netlify Blobs outlive a deploy, so
+without this a deploy that adds a field renders the old snapshot through the
+new page and every new field reads as a zero — which is exactly what the audit
+columns did on their first deploy: *Due a refresh 0*, *Audited 0/108*, an empty
+health chart, all from a snapshot collected before those fields existed. Bump
+`BLOG_SCHEMA` in `netlify/lib/blog.mjs` when the payload shape changes and the
+next page load fixes itself.
 
 ## Branding
 
