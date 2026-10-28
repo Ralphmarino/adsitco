@@ -1,4 +1,5 @@
 import { collectDifferential } from "../lib/differential.mjs";
+import { collectBlogTracker } from "../lib/blog.mjs";
 import {
   collectSnapshot,
   resolveRange,
@@ -66,6 +67,24 @@ export default async () => {
     }
   } catch (err) {
     results.push({ view: "differential-6mo", ok: false, error: err.message });
+  }
+
+  // The blog tracker is the piece that has to run on a schedule to be worth
+  // anything: it is what notices a post's lastmod moved, and it backfills
+  // publication dates a few at a time so a first run does not hammer the site.
+  try {
+    const blog = await collectBlogTracker({ backfillLimit: 25 });
+    await writeSnapshot("blog-tracker", blog, "all");
+    results.push({
+      view: "blog-tracker",
+      ok: true,
+      tracked: blog.totals.tracked,
+      newPosts: blog.totals.new,
+      publishedBackfilled: blog.backfill.filled,
+      publishedRemaining: blog.backfill.remaining,
+    });
+  } catch (err) {
+    results.push({ view: "blog-tracker", ok: false, error: err.message });
   }
 
   const failed = results.filter((r) => !r.ok);

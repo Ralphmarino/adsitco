@@ -1,9 +1,10 @@
 [build]
   publish = "public"
-  # Converts data/sales.csv into a module the functions import. Reading it at
-  # build time keeps the file out of public/, where it would be served to
-  # anyone with the URL and bypass the report's password gate.
-  command = "node scripts/build-sales.mjs"
+  # Converts the files in data/ (the sales workbook, the curated blog list) into
+  # modules the functions import. Reading them at build time keeps them out of
+  # public/, where they would be served to anyone with the URL and bypass the
+  # report's password gate.
+  command = "node scripts/build-sales.mjs && node scripts/build-blog-tracker.mjs"
 
 [functions]
   directory = "netlify/functions"

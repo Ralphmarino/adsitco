@@ -1,0 +1,10 @@
+# URLs never tracked in the Blog Tracker, one per line. Blank lines and lines
+# starting with # are ignored. This list outranks everything: use it for the
+# one-off generated posts that no pattern describes.
+#
+# Most generated URLs are caught by the patterns in netlify/lib/blog-rules.mjs
+# (model lists, transmission lists, rim lists, engine-parts-sale stubs,
+# year-and-model stubs, untitled numeric stubs). Only add a URL here when it
+# needs naming individually.
+
+https://www.adsitco.com/blog/blue-efficiency-mercedes-benz/

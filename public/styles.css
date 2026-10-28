@@ -1038,3 +1038,58 @@ tbody tr:hover {
     font-size: 48px;
   }
 }
+
+/* Blog tracker ------------------------------------------------------------ */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+/* Tier is never carried by colour alone — each badge spells out its level,
+   and the table keeps the day count in its own column. */
+.badge--high {
+  color: #fff;
+  background: var(--delta-down);
+}
+
+.badge--medium {
+  color: var(--text-primary);
+  background: transparent;
+  border-color: var(--brand-orange);
+}
+
+.badge--low {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.badge--new {
+  color: var(--text-primary);
+  border-color: var(--delta-up);
+}
+
+.reasons {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+
+.title-cell {
+  max-width: 420px;
+}
+
+.title-cell a {
+  color: var(--text-primary);
+}
+
+.title-cell .cell-sub {
+  word-break: break-all;
+}

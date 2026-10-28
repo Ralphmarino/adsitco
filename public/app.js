@@ -7,6 +7,8 @@ const PASSWORD_KEY = "adsitco-report-password";
 const salesState = { from: null, to: null, data: null, loading: null };
 
 /** The Differential tab: GSC movement per URL, on its own endpoint. */
+const blogState = { view: "priority", search: "", data: null, loading: null };
+
 const diffState = { mode: "period", search: "", sort: "delta", dir: "desc", data: null, loading: null };
 
 const state = {
@@ -1556,6 +1558,260 @@ for (const chip of document.querySelectorAll(".chip")) {
   });
 }
 
+/* Blog tracker ------------------------------------------------------------
+ *
+ * Which posts are earning search traffic, when each was last touched, and
+ * which ones are worth refreshing next.
+ *
+ * The dates maintain themselves: a nightly job reads the site's post sitemap,
+ * which the CMS regenerates whenever a post changes, so "days since update"
+ * stays true without anyone keeping a column up to date. Publication dates are
+ * not in the sitemap and never change, so they are fetched from each post once
+ * and kept.
+ */
+
+async function ensureBlogLoaded() {
+  if (blogState.data || blogState.loading) return blogState.loading;
+  const status = document.getElementById("blog-status");
+  status.hidden = false;
+  status.textContent = "Reading the sitemap and Search Console…";
+
+  const headers = {};
+  if (state.password) headers["x-report-password"] = state.password;
+  blogState.loading = fetch("/api/blog", { headers })
+    .then(async (res) => {
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || `request failed (${res.status})`);
+      return body;
+    })
+    .then((data) => (blogState.data = data))
+    .catch((err) => (blogState.data = { error: err.message, rows: [], totals: {} }))
+    .finally(() => {
+      blogState.loading = null;
+    });
+  return blogState.loading;
+}
+
+const AGE_BANDS = [
+  { band: "fresh", label: "Under 6 months" },
+  { band: "aging", label: "6–12 months" },
+  { band: "stale", label: "1–2 years" },
+  { band: "very-stale", label: "Over 2 years" },
+  { band: "unknown", label: "No date" },
+];
+
+function monthsAgo(days) {
+  if (days === null) return "—";
+  if (days < 31) return `${days}d`;
+  const months = Math.round(days / 30.44);
+  return months < 24 ? `${months} mo` : `${(days / 365).toFixed(1)} yr`;
+}
+
+function renderBlog() {
+  const data = blogState.data;
+  const status = document.getElementById("blog-status");
+  if (!data) return;
+
+  if (data.error) {
+    status.hidden = false;
+    status.textContent = `Could not load the blog tracker: ${data.error}`;
+    return;
+  }
+
+  const t = data.totals ?? {};
+  const notes = [];
+  if (data.sitemapError) notes.push(`Sitemap unreadable (${data.sitemapError}); dates are from the last good read.`);
+  notes.push(
+    `${t.tracked} posts tracked from ${t.sitemapEntries?.toLocaleString() ?? "?"} sitemap entries — ` +
+      `${t.filteredOut?.toLocaleString() ?? 0} generated pages filtered out.`,
+  );
+  if (t.new) notes.push(`${t.new} in the sitemap but not in the curated list.`);
+  if (t.missingFromSitemap) notes.push(`${t.missingFromSitemap} curated post(s) no longer in the sitemap.`);
+  if (data.backfill?.remaining) {
+    notes.push(`${data.backfill.remaining} publication date(s) still to fetch; the nightly job fills them a few at a time.`);
+  }
+  for (const w of data.warnings ?? []) notes.push(w);
+  status.hidden = false;
+  status.textContent = notes.join(" ");
+
+  document.getElementById("blog-range").textContent = data.windows
+    ? `performance: ${data.windows.recent.label} vs ${data.windows.prior.label}`
+    : "";
+
+  const rows = data.rows ?? [];
+  const withDate = rows.filter((r) => r.daysSinceUpdate !== null);
+  const median = withDate.length
+    ? [...withDate].sort((a, b) => a.daysSinceUpdate - b.daysSinceUpdate)[Math.floor(withDate.length / 2)]
+        .daysSinceUpdate
+    : null;
+  const high = rows.filter((r) => r.priority.tier === "high");
+  const stale = rows.filter((r) => r.daysSinceUpdate !== null && r.daysSinceUpdate > 365);
+  const declining = rows.filter((r) => r.clicksDelta < 0);
+
+  const plain = (label, value, sub) => {
+    const card = document.createElement("div");
+    card.className = "tile";
+    const l = document.createElement("p");
+    l.className = "tile__label";
+    l.textContent = label;
+    const v = document.createElement("p");
+    v.className = "tile__value";
+    v.textContent = value;
+    card.append(l, v);
+    if (sub) {
+      const s2 = document.createElement("p");
+      s2.className = "tile__delta";
+      s2.textContent = sub;
+      card.appendChild(s2);
+    }
+    return card;
+  };
+
+  document.getElementById("blog-tiles").replaceChildren(
+    plain("Posts tracked", int.format(t.tracked ?? 0), `${t.curated ?? 0} curated · ${t.new ?? 0} new`),
+    plain("Needing a refresh", int.format(high.length), "High priority"),
+    plain("Not updated in a year", int.format(stale.length), `${rows.length ? Math.round((stale.length / rows.length) * 100) : 0}% of posts`),
+    plain("Losing clicks", int.format(declining.length), "vs the previous 6 months"),
+    plain("Median age", median === null ? "—" : monthsAgo(median), "Since last update"),
+    plain("Publication dates", `${t.withPublished ?? 0}/${t.tracked ?? 0}`, "Known"),
+  );
+
+  // Distribution of ages, so the shape of the backlog is visible before any
+  // individual post is.
+  const counts = new Map(AGE_BANDS.map((b) => [b.band, 0]));
+  for (const r of rows) counts.set(r.freshness.band, (counts.get(r.freshness.band) ?? 0) + 1);
+  document.getElementById("blog-age-sub").textContent =
+    "Last-modified dates come from the site's post sitemap and refresh nightly.";
+  barChart(document.getElementById("blog-age-chart"), {
+    rows: AGE_BANDS.filter((b) => counts.get(b.band)).map((b) => ({
+      name: b.label,
+      value: counts.get(b.band),
+      detail: [{ label: "Posts", value: int.format(counts.get(b.band)) }],
+    })),
+    color: surfaceColor("--series-1"),
+    format: fmt.count,
+    labelWidth: 150,
+  });
+
+  const term = blogState.search.trim().toLowerCase();
+  let shown = rows.filter(
+    (r) => !term || r.url.toLowerCase().includes(term) || (r.title || "").toLowerCase().includes(term),
+  );
+  if (blogState.view === "stale") {
+    shown = [...shown].sort((a, b) => (b.daysSinceUpdate ?? -1) - (a.daysSinceUpdate ?? -1));
+  } else if (blogState.view === "declining") {
+    shown = shown.filter((r) => r.clicksDelta < 0).sort((a, b) => a.clicksDelta - b.clicksDelta);
+  } else if (blogState.view === "new") {
+    shown = shown.filter((r) => r.source === "new");
+  } else {
+    shown = [...shown].sort((a, b) => b.priority.score - a.priority.score);
+  }
+
+  document.getElementById("blog-table-sub").textContent =
+    blogState.view === "priority"
+      ? "Ranked by clicks at risk: traffic the post still earns, weighted by how long since it was touched and how fast it is sliding."
+      : `${shown.length} post(s)`;
+
+  renderBlogTable(document.getElementById("blog-table"), shown);
+}
+
+function renderBlogTable(container, rows) {
+  container.replaceChildren();
+  if (!rows.length) {
+    const p = document.createElement("p");
+    p.className = "chart__empty";
+    p.textContent = "No posts match.";
+    container.appendChild(p);
+    return;
+  }
+
+  const table = document.createElement("table");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  for (const label of ["Post", "Priority", "Published", "Last updated", "Age", "Clicks", "Δ Clicks", "Impr.", "Pos."]) {
+    const th = document.createElement("th");
+    th.textContent = label;
+    th.scope = "col";
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+
+  const tbody = document.createElement("tbody");
+  for (const r of rows.slice(0, 400)) {
+    const tr = document.createElement("tr");
+
+    const title = document.createElement("td");
+    title.className = "title-cell";
+    const link = document.createElement("a");
+    link.href = r.url;
+    link.target = "_blank";
+    link.rel = "noreferrer noopener";
+    link.textContent = r.title || r.url.replace(/^https?:\/\/[^/]+/, "");
+    const sub = document.createElement("span");
+    sub.className = "cell-sub";
+    sub.textContent = r.url.replace(/^https?:\/\/[^/]+/, "");
+    title.append(link, sub);
+    if (r.source === "new") {
+      const badge = document.createElement("span");
+      badge.className = "badge badge--new";
+      badge.textContent = "New — not in curated list";
+      const wrap = document.createElement("span");
+      wrap.className = "cell-sub";
+      wrap.appendChild(badge);
+      title.appendChild(wrap);
+    }
+    tr.appendChild(title);
+
+    const priority = document.createElement("td");
+    priority.style.textAlign = "left";
+    const badge = document.createElement("span");
+    badge.className = `badge badge--${r.priority.tier}`;
+    badge.textContent = { high: "High", medium: "Medium", low: "Low" }[r.priority.tier];
+    const reasons = document.createElement("span");
+    reasons.className = "reasons";
+    reasons.textContent = r.priority.reasons.join(" · ");
+    priority.append(badge, reasons);
+    tr.appendChild(priority);
+
+    const cell = (text) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      tr.appendChild(td);
+      return td;
+    };
+    cell(r.published ? prettyDate(r.published) : "—");
+    cell(r.lastmod ? prettyDate(r.lastmod) : "—");
+    cell(monthsAgo(r.daysSinceUpdate));
+    cell(int.format(r.clicks));
+
+    const delta = document.createElement("td");
+    delta.appendChild(deltaCell(r.clicksDelta, (v) => int.format(Math.abs(v))));
+    tr.appendChild(delta);
+
+    cell(int.format(r.impressions));
+    cell(r.position ? r.position.toFixed(1) : "—");
+    tbody.appendChild(tr);
+  }
+
+  table.append(thead, tbody);
+  container.appendChild(table);
+}
+
+for (const button of document.querySelectorAll("[data-blog]")) {
+  button.addEventListener("click", () => {
+    blogState.view = button.dataset.blog;
+    for (const other of document.querySelectorAll("[data-blog]")) {
+      other.classList.toggle("is-active", other === button);
+    }
+    renderBlog();
+  });
+}
+
+document.getElementById("blog-search").addEventListener("input", (event) => {
+  blogState.search = event.target.value;
+  renderBlog();
+});
+
 /* Differential tab --------------------------------------------------------
  *
  * Per-URL movement in Search Console, on two comparisons: the last six months
@@ -1935,6 +2191,7 @@ for (const button of document.querySelectorAll(".tabs__btn")) {
     document.getElementById("tab-analytics").hidden = tab !== "analytics";
     document.getElementById("tab-sales").hidden = tab !== "sales";
     document.getElementById("tab-diff").hidden = tab !== "diff";
+    document.getElementById("tab-blog").hidden = tab !== "blog";
 
     const analytics = tab === "analytics";
     for (const id of ["filter-country", "filter-device"]) {
@@ -1947,8 +2204,8 @@ for (const button of document.querySelectorAll(".tabs__btn")) {
     document.getElementById("custom-range").hidden = !analytics || !state.custom;
     document.querySelector(".segmented").hidden = !analytics;
     // Only Analytics and Sales share the comparison basis.
-    document.getElementById("comparison").closest(".field").hidden = tab === "diff";
-    document.querySelector(".filterbar").hidden = tab === "diff";
+    document.getElementById("comparison").closest(".field").hidden = tab === "diff" || tab === "blog";
+    document.querySelector(".filterbar").hidden = tab === "diff" || tab === "blog";
 
     // Charts measure their container, which has no width while hidden, so
     // each tab draws after it becomes visible.
@@ -1959,6 +2216,8 @@ for (const button of document.querySelectorAll(".tabs__btn")) {
       });
     } else if (tab === "diff") {
       ensureDifferentialLoaded().then(renderDifferential);
+    } else if (tab === "blog") {
+      ensureBlogLoaded().then(renderBlog);
     } else {
       render();
     }

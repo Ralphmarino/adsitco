@@ -118,8 +118,9 @@ with notes; the required ones are:
 
 Mark `GOOGLE_PRIVATE_KEY`, `REPORT_PASSWORD` and `REFRESH_TOKEN` as **secret** in
 Netlify. Every environment variable here is read at request time inside a
-function — the build command is `echo` and nothing reads `process.env` during a
-build — so making them write-only and runtime-only costs this project nothing.
+function — the build only converts the data files in `data/` into modules and
+reads no `process.env` — so making them write-only and runtime-only costs this
+project nothing.
 
 Leave `GOOGLE_CLIENT_EMAIL` readable. It identifies the service account rather
 than authenticating it, and seeing it in the UI tells you which account is
@@ -300,8 +301,9 @@ is no longer used. Regenerate with `node scripts/make-sample-data.mjs`.
 
 ## Sales tab
 
-The report has two tabs: **Search & analytics** (GA4 + Search Console) and
-**Sales**, which reads `data/sales.csv` from this repository.
+The report has four tabs: **Search & analytics** (GA4 + Search Console),
+**Sales** (this one, which reads the workbook in `data/`), **Differential** and
+**Blog tracker**.
 
 ### Where the file goes
 
@@ -436,6 +438,127 @@ verify the API exposes them — tell me the dimension and they go in; and the
 country, device and channel filters, which apply to the Analytics tab only.
 Differential figures are site-wide, matching the reference sheet.
 
+## Blog tracker tab
+
+Every SEO post on the blog, with when it was published, when it last changed,
+how long ago that was, how its search performance is trending, and what to
+refresh next.
+
+### Keeping the dates current, automatically
+
+This is the part that has to be automatic to be worth anything — a tracker whose
+"last updated" column is itself out of date is worse than no tracker.
+
+```
+post-sitemap.xml  ──┐  lastmod per URL, every run
+                    │
+data/blog-tracker…  ├──▶  netlify/lib/blog.mjs  ──▶  blog-state  (Netlify Blobs)
+  (curated titles)  │         merge + diff            per-URL history
+                    │
+Search Console  ────┘  clicks / impressions / position, both comparisons
+```
+
+1. **The sitemap is the source of truth for dates.** `post-sitemap.xml` carries
+   a `lastmod` per URL, which WordPress updates when a post is edited. Nothing
+   has to be maintained by hand, and a post edited on the site shows up here on
+   the next run. Override the URL with `BLOG_SITEMAP_URL` if the path changes.
+2. **The nightly job diffs it against stored state.** `refresh.mjs` runs the
+   tracker every morning and keeps a `blog-state` blob of what each URL looked
+   like last time. A `lastmod` that moves is recorded as an **observed update**
+   with the date it was seen, so the tab shows a post's edit history rather than
+   just a number that silently changes. A URL that appears in the sitemap and
+   not in state is flagged **New**.
+3. **Publication dates are backfilled a few at a time.** The sitemap has no
+   published date, so the first-seen date is read from the post's own HTML
+   (`article:published_time`, then `datePublished` JSON-LD, then a `<time
+   class="published">`). That means one fetch per post, so a read does at most 8
+   and the nightly job at most 25, cached permanently once found. A hundred posts
+   fill in over the first few nights instead of hammering the site on one
+   request. The tile shows the coverage (`Publication dates: 51/108`) so a
+   partially filled column is visible rather than looking like missing data.
+
+Dates found this way are the **real** published dates. Where one cannot be
+found, the column reads "—" rather than falling back to first-seen, which would
+look like a date and be wrong.
+
+### Which URLs are tracked
+
+The blog holds a few hundred written posts and several thousand generated ones.
+Only the written ones are tracked. Precedence, most specific first:
+
+1. An explicit entry in **`data/blog-exclude.txt`** is never tracked. One URL
+   per line, `#` for comments — this is where to put a one-off that no pattern
+   catches.
+2. Anything matching a pattern in **`netlify/lib/blog-rules.mjs`** is not
+   tracked: generated model lists, per-model transmission lists,
+   engine-parts-for-sale stubs, per-year rim lists, year-and-model stubs and
+   bare numeric stubs.
+3. Everything else — the curated CSV and the sitemap — is tracked.
+
+**Keyword matching cannot do this job.** "transmissions", "engine-parts" and
+"rims" all appear in real posts (`mercedes-benz-transmissions-over-the-years`,
+`mercedes-engine-parts-guide`, `how-to-clean-mercedes-rims-and-wheels`), so the
+patterns anchor on the *shape* a generated URL takes — a list prefix, a
+transmissions suffix, a year-and-model stem — rather than on a word appearing
+anywhere. Against the exclusion list supplied for this build they catch 28 of
+28 sample URLs while keeping every real post.
+
+A pattern outranks the curated list deliberately: one generated URL
+(`450-sl-rebuilt-mercedes-transmissions-sale`) is in both, and the build
+**names every curated URL a pattern removed**, so a wrong call shows up in the
+build log instead of a post quietly vanishing from the report.
+
+```
+$ node scripts/build-blog-tracker.mjs
+108 curated post(s), 1 with a published date, 1 explicit exclusion(s),
+1 removed by pattern
+```
+
+### The flagging system
+
+Four things are flagged, and each one answers a different question:
+
+| Flag | Question |
+| --- | --- |
+| **Days since update** + freshness band | How long has this sat? Fresh ≤ 6 months, Aging ≤ 1 year, Stale ≤ 2 years, Very stale beyond |
+| **Priority tier** | Where is traffic actually at risk? |
+| **Declining** | Is it losing clicks against the previous period? |
+| **New** | Did it appear since the last run? |
+
+Priority is not "oldest first". The score is the clicks a post **still earns**,
+weighted up by how long since it was touched (up to 3× at three years) and by
+how fast it is losing ground (up to 3× at a total collapse):
+
+```
+score = clicks × min(1 + days/365, 3) × (1 + min(declinePct, 1) × 2)
+```
+
+A stale post nobody reads scores near zero — rewriting it protects nothing. A
+high-traffic post sliding for a year scores high. Each row carries the reason in
+words ("Clicks down 34%", "Not updated in 19 months") rather than only a number,
+so the list can be handed to a writer as a work queue.
+
+The freshness bands are wide on purpose and the exact day count sits next to the
+label: a post is not stale at a fixed age, and the band is there to sort
+attention, not to make the call.
+
+### Performance
+
+Trend data is the same Search Console collection the Differential tab uses, so
+the two tabs agree by construction and the blog tracker adds no extra queries
+beyond its own. Clicks, impressions and position are shown for the current
+period with a signed delta against the previous one, on the same **last 6 months
+vs the previous 6** basis.
+
+The country, device and channel filters are hidden here: the tracker is
+site-wide, matching the Differential tab.
+
+### How it loads
+
+`/api/blog`, cached for 12 hours and warmed by the nightly job. The table is
+sortable on every column and filterable by URL, and the whole history is sent
+at once so sorting and filtering cost no round trip.
+
 ## Branding
 
 The report carries adsitco's chrome: the thin orange rule over a charcoal
@@ -483,6 +606,14 @@ netlify/lib/ga4.mjs             Analytics Data API queries
 netlify/lib/gsc.mjs             Search Console API queries
 netlify/lib/collect.mjs         one snapshot, both sources, partial-failure tolerant
 netlify/lib/store.mjs           Netlify Blobs cache
+netlify/functions/sales.mjs     /api/sales — the workbook, read at build time
+netlify/functions/differential.mjs  /api/differential — per-URL movement, + CSV
+netlify/functions/blog.mjs      /api/blog — the blog tracker
+netlify/lib/blog.mjs            merge sitemap + curated list + Search Console
+netlify/lib/blog-rules.mjs      which URLs are SEO posts and which are generated
+netlify/lib/sitemap.mjs         post-sitemap.xml, and published dates from HTML
+scripts/build-sales.mjs         data/*.xlsx → a module the functions import
+scripts/build-blog-tracker.mjs  data/blog-tracker*.csv → the curated seed
 public/                         the dashboard (no third-party scripts)
 ```
 

@@ -94,6 +94,7 @@
         </button>
         <button class="tabs__btn" type="button" data-tab="sales">Sales</button>
         <button class="tabs__btn" type="button" data-tab="diff">Differential</button>
+        <button class="tabs__btn" type="button" data-tab="blog">Blog tracker</button>
       </nav>
 
       <div class="filterbar">
@@ -483,6 +484,48 @@
             </div>
           </div>
           <div class="table-view table-view--tall" id="diff-table"></div>
+        </section>
+      </main>
+
+      <main class="page" id="tab-blog" hidden>
+        <p class="notice notice--inline" id="blog-status" hidden></p>
+
+        <div class="diffbar">
+          <div class="segmented" role="group" aria-label="View">
+            <button class="segmented__btn is-active" type="button" data-blog="priority">Refresh priority</button>
+            <button class="segmented__btn" type="button" data-blog="stale">Oldest first</button>
+            <button class="segmented__btn" type="button" data-blog="declining">Losing clicks</button>
+            <button class="segmented__btn" type="button" data-blog="new">New posts</button>
+          </div>
+          <input class="field__control field__control--search" id="blog-search" type="search"
+                 placeholder="Filter posts…" aria-label="Filter posts" />
+        </div>
+
+        <section aria-labelledby="blog-summary-heading">
+          <h2 class="section__title" id="blog-summary-heading">
+            Blog health <span class="section__range" id="blog-range"></span>
+          </h2>
+          <div class="tiles" id="blog-tiles"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="blog-age-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="blog-age-heading">Posts by age since last update</h2>
+              <p class="panel__sub" id="blog-age-sub"></p>
+            </div>
+          </div>
+          <div class="chart" id="blog-age-chart"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="blog-table-heading">
+          <div class="panel__head">
+            <div>
+              <h2 class="panel__title" id="blog-table-heading">Posts</h2>
+              <p class="panel__sub" id="blog-table-sub"></p>
+            </div>
+          </div>
+          <div class="table-view table-view--tall" id="blog-table"></div>
         </section>
       </main>
 
