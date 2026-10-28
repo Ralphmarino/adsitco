@@ -1,0 +1,8 @@
+# This site is a private report: Search Console figures, sales revenue, and
+# internal audit notes. The X-Robots-Tag header in netlify.toml is the control
+# that actually keeps it out of an index — a crawler that ignores this file
+# ignores it either way, and a disallowed URL can still be indexed from a link
+# elsewhere. This is here because the tracker spec asks for both, and because
+# the well-behaved majority read it.
+User-agent: *
+Disallow: /

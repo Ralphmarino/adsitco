@@ -441,45 +441,84 @@ Differential figures are site-wide, matching the reference sheet.
 ## Blog tracker tab
 
 Every SEO post on the blog, with when it was published, when it last changed,
-how long ago that was, how its search performance is trending, and what to
-refresh next.
+how it is performing, what the audit decided, whether it conforms to the
+current post format, and what to refresh next.
+
+This tab implements `spec-blog-tracker.md` and `spec-blog-audit-criteria.md`
+inside the existing report rather than as the separate Python + GitHub Actions
+repo those specs sketch. The specs' data model, computed fields and guardrails
+are followed as written; the hosting, scheduling and access decisions left open
+in the tracker spec's section 13 are already answered here — Netlify, a nightly
+scheduled function, and the report's own password gate.
+
+### Where every field comes from
+
+```
+WordPress REST API ──┐  id, slug, title, published, modified, categories, tags
+  /wp-json/wp/v2     │  (+ rendered content, nightly, for conformance)
+                     │
+post-sitemap.xml ────┤   lastmod per URL — fallback
+the posts' own HTML ─┤   both dates — last-resort fallback
+                     │
+data/blog-dates.csv ─┤   dates entered by hand — outranks all of the above
+audit/audit-records ─┤   verdicts, voice, cluster, last_substantive_update
+data/manual/*.csv ───┤   backlinks, tracked keywords (quarterly exports)
+                     ├──▶ netlify/lib/blog.mjs ──▶ blog-state (Netlify Blobs)
+Search Console ──────┘    merge + compute              per-URL history
+  6mo vs 6mo, and 90d vs prior 90d vs the same 90d last year
+```
 
 ### Keeping the dates current, automatically
 
-This is the part that has to be automatic to be worth anything — a tracker whose
-"last updated" column is itself out of date is worse than no tracker.
+A tracker whose "last updated" column is itself out of date is worse than no
+tracker, so this part runs without anyone maintaining it.
 
-```
-post-sitemap.xml  ──┐  lastmod per URL, every run
-                    │
-data/blog-tracker…  ├──▶  netlify/lib/blog.mjs  ──▶  blog-state  (Netlify Blobs)
-  (curated titles)  │         merge + diff            per-URL history
-                    │
-Search Console  ────┘  clicks / impressions / position, both comparisons
-```
+1. **WordPress is the source of truth.** `/wp-json/wp/v2/posts` returns `date`
+   and `modified` and takes a list of slugs, so the tracker asks for exactly
+   the posts it tracks: ~110 posts in three requests, both dates. Override the
+   endpoint with `BLOG_WP_API_ROOT`.
+2. **The sitemap and the posts' own pages are fallbacks.** If the REST route is
+   disabled, `lastmod` still gives a modified date; failing that, each post's
+   HTML is read for `article:published_time` and `article:modified_time`. That
+   last one is a request per post, so a page load does at most 8 and the
+   nightly job 25, cached once found.
+3. **Nothing is guessed at.** Precedence is `manual > WordPress > sitemap >
+   scraped > stored`, and **every date cell's tooltip names its source**, so
+   "entered by hand" and "left over from an earlier run" are distinguishable
+   from each other and from "not known".
+4. **The nightly job diffs against stored state.** A modified date that moves
+   is recorded as an **observed update** with the date it was seen, so the tab
+   shows a post's edit history rather than a number that silently changes. A
+   post the site knows about and the curated list does not is flagged **New**,
+   and once found it stays tracked even if a later run cannot reach the site.
 
-1. **The sitemap is the source of truth for dates.** `post-sitemap.xml` carries
-   a `lastmod` per URL, which WordPress updates when a post is edited. Nothing
-   has to be maintained by hand, and a post edited on the site shows up here on
-   the next run. Override the URL with `BLOG_SITEMAP_URL` if the path changes.
-2. **The nightly job diffs it against stored state.** `refresh.mjs` runs the
-   tracker every morning and keeps a `blog-state` blob of what each URL looked
-   like last time. A `lastmod` that moves is recorded as an **observed update**
-   with the date it was seen, so the tab shows a post's edit history rather than
-   just a number that silently changes. A URL that appears in the sitemap and
-   not in state is flagged **New**.
-3. **Publication dates are backfilled a few at a time.** The sitemap has no
-   published date, so the first-seen date is read from the post's own HTML
-   (`article:published_time`, then `datePublished` JSON-LD, then a `<time
-   class="published">`). That means one fetch per post, so a read does at most 8
-   and the nightly job at most 25, cached permanently once found. A hundred posts
-   fill in over the first few nights instead of hammering the site on one
-   request. The tile shows the coverage (`Publication dates: 51/108`) so a
-   partially filled column is visible rather than looking like missing data.
+**Two dates, deliberately.** The spec is explicit that WordPress `modified`
+moves on any save — a typo fix reads as a refresh — so it cannot stand in for
+the date of the last real revision. `last_substantive_update` in
+`audit/audit-records.csv` is that date, entered by hand. Where a post has one
+it wins, the refresh rules use it, and the cell says **substantive**; otherwise
+the cell says **last save** and the tooltip spells out why that is weaker
+evidence.
 
-Dates found this way are the **real** published dates. Where one cannot be
-found, the column reads "—" rather than falling back to first-seen, which would
-look like a date and be wrong.
+### If the site refuses the request
+
+It did on the first deploy: every request to adsitco.com came back `403`,
+almost certainly a firewall or bot filter. The tab now handles that as a
+condition it describes rather than an error:
+
+- Requests are shaped like an ordinary browser's, with one retry on the
+  statuses a filter returns. **`BLOG_FETCH_USER_AGENT`** overrides the string
+  if the host allowlists a specific one.
+- `robots.txt` is read for the sitemap address before any path is guessed at,
+  then the usual paths are tried in turn — `/post-sitemap.xml` is a Yoast
+  convention and WordPress core publishes `/wp-sitemap.xml`.
+- **`/api/blog?diagnose=1`** names every address tried and what each returned.
+  It reads no cached state, so it answers while collection is failing.
+- The tab keeps the last known dates, says plainly that the site refused, and
+  carries the fix. The nightly job logs a refused run as a failure rather than
+  a success.
+- `data/blog-dates.csv` fills dates in by hand regardless, so the column is
+  never blocked on the site answering.
 
 ### Which URLs are tracked
 
@@ -514,50 +553,147 @@ $ node scripts/build-blog-tracker.mjs
 1 removed by pattern
 ```
 
+### Health status
+
+The spec's rules, first match wins, with every threshold read from
+`data/blog-config.json`:
+
+| Status | Rule |
+| --- | --- |
+| `removed` | A `REMOVE` verdict that has been executed, or absorbed by a `MERGE` |
+| `new` | Published or substantively updated inside 90 days |
+| `declining` | Clicks down more than 30% vs the prior 90 days **and** vs the same 90 days last year |
+| `striking-distance` | Average position 8–20 with at least 100 impressions |
+| `strong` | Average position 10 or better with at least 30 clicks |
+| `stable` | At least 200 impressions, none of the above |
+| `weak` | Fewer than 200 impressions |
+| `unknown` | No Search Console rows at all |
+
+**Both comparisons have to agree before a post is called declining.** On a site
+selling convertible parts, clicks down 40% on the previous quarter could be
+decay or it could be October; down 40% on the previous quarter *and* on the same
+quarter last year is decay. That year-ago window is the reason this tab runs its
+own three Search Console queries rather than reusing the Differential tab's.
+
+`unknown` exists because "no data" is not the same judgement as `weak`. A post
+with no rows has not been measured; calling it weak would be inventing a
+finding.
+
+Two departures from the spec, both deliberate: `removed` is checked **before**
+`new`, because a post whose 301 went in last week is not a new post; and
+`unknown` is added for the no-data case.
+
 ### The flagging system
 
-Four things are flagged, and each one answers a different question:
+Six flags, each answering a different question:
 
 | Flag | Question |
 | --- | --- |
 | **Days since update** + freshness band | How long has this sat? Fresh ≤ 6 months, Aging ≤ 1 year, Stale ≤ 2 years, Very stale beyond |
-| **Priority tier** | Where is traffic actually at risk? |
-| **Declining** | Is it losing clicks against the previous period? |
+| **Health** | Is the post working? |
+| **Due a refresh** | Does the spec's own rule say to rewrite it? |
+| **Refresh priority** | Within the queue, where to start |
+| **Vetoes** | Is there a reason a `REMOVE` cannot be finalised? |
 | **New** | Did it appear since the last run? |
 
-Priority is not "oldest first". The score is the clicks a post **still earns**,
-weighted up by how long since it was touched (up to 3× at three years) and by
-how fast it is losing ground (up to 3× at a total collapse):
+**Due a refresh** is the spec's rule: the last substantive update is older than
+six months **and** health is `strong`, `striking-distance` or `declining`. The
+health condition is the point — a post nobody finds does not become worth
+rewriting by getting older, and the queue should not fill with pages that have
+nothing to protect.
+
+**Refresh priority** orders that queue; it is not a verdict, and the UI says so.
+The score is the clicks a post still earns, weighted up by how long since it was
+touched (up to 3×) and by how fast it is losing ground (up to 3×), with a 1.5×
+lift for striking-distance posts because they are the cheapest wins on the site:
 
 ```
-score = clicks × min(1 + days/365, 3) × (1 + min(declinePct, 1) × 2)
+score = clicks × min(1 + days/365, 3) × (1 + min(declinePct, 1) × 2) × opportunity
 ```
 
-A stale post nobody reads scores near zero — rewriting it protects nothing. A
-high-traffic post sliding for a year scores high. Each row carries the reason in
-words ("Clicks down 34%", "Not updated in 19 months") rather than only a number,
-so the list can be handed to a writer as a work queue.
+Each row carries the reason in words ("Clicks down 34%", "Not updated in 19
+months", "Within reach of page one") rather than only a number, so the list
+hands off to a writer as a work queue.
 
 The freshness bands are wide on purpose and the exact day count sits next to the
-label: a post is not stale at a fixed age, and the band is there to sort
-attention, not to make the call.
+label: a post is not stale at a fixed age, and the band sorts attention rather
+than making the call.
 
-### Performance
+### The audit layer
 
-Trend data is the same Search Console collection the Differential tab uses, so
-the two tabs agree by construction and the blog tracker adds no extra queries
-beyond its own. Clicks, impressions and position are shown for the current
-period with a signed delta against the previous one, on the same **last 6 months
-vs the previous 6** basis.
+`audit/audit-records.csv` is the audit spec's output contract, read verbatim —
+`post_id`, `slug`, `batch`, `cluster`, `verdict`, `confidence`, `audit_status`,
+`image_style`, `voice_issues`, `last_substantive_update` and the rest. **The
+tracker reads it and never writes it**: verdicts come from the audit process,
+which is a guardrail in the spec and the reason verdict sits in its own column
+away from the computed priority.
+
+Records join on slug at build time (`post_id` needs WordPress, which is a
+runtime source) and the WordPress id is carried through for the runtime join.
+A record matching no tracked post is reported in the build log rather than
+silently dropped.
+
+`audit/gaps.csv` takes the gap log. `data/manual/backlinks.csv` and
+`data/manual/keywords.csv` take the quarterly exports that have no API — they
+drive the spec's two vetoes, shown on each row so a backlink hold or a
+consultant review is visible *before* anyone proposes a removal.
+
+Both the verdict column and the verdict filter stay hidden until at least one
+record exists. A column of "Not audited" and a filter with one option are
+controls that do nothing.
+
+### Format conformance
+
+Read from the posts themselves on the nightly run, since it means fetching
+every article:
+
+- **`format_conforms`** — carries H2s containing *Relevant Chassis* and *Top
+  Takeaways*. Matched case-insensitively on the heading text, so "Relevant
+  Chassis and Years" counts; failing a post on its capitalisation would make
+  the column noise.
+- **`has_faqs`** — a heading matching the configured FAQ pattern.
+- **`internal_links_out`**, split out by **money links** — links to a product or
+  category path. `[VERIFY]` those path patterns in `data/blog-config.json`;
+  anything unmatched counts as a plain internal link.
+- **`internal_links_in`** — counted from the other posts' outbound links, so
+  **orphans** (safe to cut) are distinguishable from **hubs** (not safe), which
+  is the spec's cluster-role check.
+
+The conformance panel hides itself until the nightly job has run. A row of
+"0 of 0" tiles would read as every post failing.
+
+### Thresholds
+
+`data/blog-config.json` holds every threshold, the FAQ pattern, the money-page
+paths and the required headings, so they can be tuned without a code change —
+the spec's guardrail, and the starting values are its placeholders. It is JSON
+rather than the spec's `config.yml` because parsing YAML would mean adding a
+dependency to a project that has one; every value the spec names is there under
+the same name. Built-in defaults exist only so a missing or malformed file
+cannot take the tab down.
+
+### Views and export
+
+Six views — **Refresh priority**, **Refresh due**, **Striking distance**,
+**Oldest first**, **Losing clicks**, **New posts** — plus chip filters for
+health and verdict, which narrow independently because one is computed from
+Search Console and the other is a human decision.
+
+*Download all fields (CSV)* exports every field under the audit record's own
+column names, so it round-trips into the spreadsheet work the audit runs on.
+The download is **fetched with the report password and handed to the browser as
+a blob** rather than being a plain link: a bare `<a download>` cannot send a
+header, so once `REPORT_PASSWORD` was set the old Differential CSV link saved a
+401 response body as a `.csv`. Both links now go through the same path.
 
 The country, device and channel filters are hidden here: the tracker is
 site-wide, matching the Differential tab.
 
 ### How it loads
 
-`/api/blog`, cached for 12 hours and warmed by the nightly job. The table is
-sortable on every column and filterable by URL, and the whole history is sent
-at once so sorting and filtering cost no round trip.
+`/api/blog`, cached for 12 hours and warmed by the nightly job, which is also
+the run that reads post content for conformance. Everything else is computed on
+the fly from one payload, so every view, filter and sort is instant.
 
 ## Branding
 
@@ -608,13 +744,25 @@ netlify/lib/collect.mjs         one snapshot, both sources, partial-failure tole
 netlify/lib/store.mjs           Netlify Blobs cache
 netlify/functions/sales.mjs     /api/sales — the workbook, read at build time
 netlify/functions/differential.mjs  /api/differential — per-URL movement, + CSV
-netlify/functions/blog.mjs      /api/blog — the blog tracker
-netlify/lib/blog.mjs            merge sitemap + curated list + Search Console
+netlify/functions/blog.mjs      /api/blog — the blog tracker, + CSV, + diagnose
+netlify/lib/blog.mjs            merge every source, assemble the rows
+netlify/lib/blog-health.mjs     the audit spec's health, refresh and conformance rules
 netlify/lib/blog-rules.mjs      which URLs are SEO posts and which are generated
-netlify/lib/sitemap.mjs         post-sitemap.xml, and published dates from HTML
+netlify/lib/wp-api.mjs          WordPress REST — dates, taxonomy, content
+netlify/lib/sitemap.mjs         sitemap discovery, and dates scraped from a post
+netlify/lib/site-fetch.mjs      the one place that talks to adsitco.com
 scripts/build-sales.mjs         data/*.xlsx → a module the functions import
-scripts/build-blog-tracker.mjs  data/blog-tracker*.csv → the curated seed
+scripts/build-blog-tracker.mjs  data/ + audit/ → the curated seed and thresholds
 public/                         the dashboard (no third-party scripts)
+
+data/blog-tracker-urls.csv      the curated post list
+data/blog-exclude.txt           URLs never to track
+data/blog-dates.csv             dates entered by hand — highest precedence
+data/blog-config.json           every threshold the health rules use
+data/manual/backlinks.csv       quarterly export — the backlink veto
+data/manual/keywords.csv        quarterly export — the tracked-keyword veto
+audit/audit-records.csv         the audit spec's output contract (read-only here)
+audit/gaps.csv                  the gap log
 ```
 
 The front end loads no external script, font or stylesheet — nothing outside

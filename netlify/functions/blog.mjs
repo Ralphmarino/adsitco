@@ -1,5 +1,5 @@
 import { checkViewerAuth, checkRefreshAuth, json } from "../lib/auth.mjs";
-import { collectBlogTracker, diagnoseBlogSources } from "../lib/blog.mjs";
+import { collectBlogTracker, diagnoseBlogSources, blogCsv } from "../lib/blog.mjs";
 import { readSnapshot, writeSnapshot, ageInMinutes } from "../lib/store.mjs";
 
 // The sitemap changes when a post is published or edited, so a day-old view is
@@ -32,9 +32,19 @@ export default async (req) => {
     return json({ error: "forbidden", message: "Valid x-refresh-token required to force a refresh." }, 403);
   }
 
+  const wantsCsv = url.searchParams.get("format") === "csv";
+  const asCsv = (data) =>
+    new Response(blogCsv(data.rows ?? []), {
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="adsitco-blog-tracker-${new Date().toISOString().slice(0, 10)}.csv"`,
+        "cache-control": "no-store",
+      },
+    });
+
   const cached = await readSnapshot(CACHE_KEY, "all");
   if (!force && cached && ageInMinutes(cached) <= STALE_AFTER_MINUTES) {
-    return json({ ...cached, cache: "hit" });
+    return wantsCsv ? asCsv(cached) : json({ ...cached, cache: "hit" });
   }
 
   try {
@@ -44,9 +54,10 @@ export default async (req) => {
     // should not wait on dozens of page fetches.
     const data = await collectBlogTracker({ scrapeLimit: force ? 25 : 8 });
     if (data.rows.length) await writeSnapshot(CACHE_KEY, data, "all");
-    return json({ ...data, cache: force ? "forced" : "miss" });
+    return wantsCsv ? asCsv(data) : json({ ...data, cache: force ? "forced" : "miss" });
   } catch (err) {
     if (cached) {
+      if (wantsCsv) return asCsv(cached);
       return json({
         ...cached,
         cache: "stale",

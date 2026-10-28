@@ -268,8 +268,19 @@ body {
   font-weight: 600;
 }
 
+/* A segmented control that wraps.
+
+   It used to be a non-wrapping inline-flex, which was fine at four options and
+   pushed the whole page 50px wide at six on a phone — nothing inside it could
+   shrink, so the overflow landed on the document. The dividers are now a 1px
+   gap with the container's background showing through, which draws them in
+   both axes and so survives wrapping; a border-left would have put a stray
+   divider at the start of the second row. */
 .segmented {
   display: inline-flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--border);
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -286,8 +297,11 @@ body {
   padding: 7px 13px;
 }
 
-.segmented__btn + .segmented__btn {
-  border-left: 1px solid var(--border);
+/* Opaque, so the container's background reads as a divider in the gaps rather
+   than behind the labels. */
+.segmented__btn {
+  background: var(--surface-1);
+  flex: 0 1 auto;
 }
 
 .segmented__btn:hover,
@@ -640,6 +654,50 @@ th .sort-arrow {
 
 .btn--compact {
   padding: 6px 12px;
+}
+
+/* A selected filter chip. The fill carries the state rather than the text
+   colour alone, so it survives a greyscale print and a colourblind reader. */
+.chip--on {
+  background: var(--brand-charcoal);
+  border-color: var(--brand-charcoal);
+  color: #fff;
+  font-weight: 600;
+}
+
+.chip--on:hover {
+  background: var(--brand-charcoal);
+  border-color: var(--brand-charcoal);
+  color: #fff;
+}
+
+.chip__count {
+  opacity: 0.65;
+  margin-left: 5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chipfilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  align-items: baseline;
+  padding: 4px 0 2px;
+}
+
+.chipfilters__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.chipfilters__label {
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
 }
 
 .tooltip__when {
@@ -1086,6 +1144,117 @@ tbody tr:hover {
 .badge--new {
   color: var(--text-primary);
   border-color: var(--delta-up);
+}
+
+.badge--none {
+  color: var(--text-muted);
+  border-color: var(--border);
+  opacity: 0.7;
+}
+
+/* Health statuses.
+
+   Deliberately not a rainbow. Only the two statuses that are a call to action
+   get a fill — declining (losing ground on both comparisons) and striking
+   distance (the cheap win) — and the rest are outlines, so the eye lands on
+   the ~20 rows worth doing something about rather than on all 108. Every
+   status also carries its name as text, so none of this is load-bearing. */
+.badge--h-declining {
+  color: #fff;
+  background: var(--delta-down);
+}
+
+.badge--h-striking-distance {
+  color: #fff;
+  background: var(--brand-orange-deep);
+}
+
+.badge--h-strong {
+  color: var(--delta-up);
+  border-color: var(--delta-up);
+}
+
+.badge--h-stable,
+.badge--h-weak,
+.badge--h-unknown {
+  color: var(--text-muted);
+  border-color: var(--border);
+}
+
+.badge--h-new {
+  color: var(--text-primary);
+  border-color: var(--delta-up);
+}
+
+.badge--h-removed {
+  color: var(--text-muted);
+  border-color: var(--border);
+  text-decoration: line-through;
+}
+
+/* Audit verdicts. Outlines throughout: a verdict is a decision already made,
+   not something the table is asking anyone to act on. */
+.badge--v-KEEP,
+.badge--v-IMPROVE,
+.badge--v-MERGE,
+.badge--v-REMOVE {
+  color: var(--text-primary);
+  border-color: var(--axis);
+}
+
+.badge--v-REMOVE {
+  color: var(--delta-down);
+  border-color: var(--delta-down);
+}
+
+/* Small inline markers under a post title: conformance, vetoes, flags. */
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 3px;
+}
+
+.flag {
+  font-size: 10.5px;
+  line-height: 1.5;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.flag--warn {
+  color: var(--delta-down);
+  border-color: var(--delta-down);
+}
+
+.flag--ok {
+  color: var(--delta-up);
+  border-color: var(--delta-up);
+}
+
+.flag--veto {
+  color: var(--text-primary);
+  border-color: var(--brand-orange);
+}
+
+/* Due a refresh. Filled, because it is the one marker here that is a
+   straightforward instruction. */
+.flag--due {
+  color: #fff;
+  background: var(--brand-orange-deep);
+  border-color: var(--brand-orange-deep);
+  font-weight: 600;
+}
+
+/* The date column says which date it is using. `modified` moves on any save,
+   so a row leaning on it is not evidence of a real update. */
+.cell-basis {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-muted);
 }
 
 .reasons {

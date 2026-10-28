@@ -21,6 +21,11 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CSV = resolve(ROOT, "data/blog-tracker-urls.csv");
 const EXCLUDE = resolve(ROOT, "data/blog-exclude.txt");
 const DATES = resolve(ROOT, "data/blog-dates.csv");
+const CONFIG = resolve(ROOT, "data/blog-config.json");
+const AUDIT = resolve(ROOT, "audit/audit-records.csv");
+const GAPS = resolve(ROOT, "audit/gaps.csv");
+const BACKLINKS = resolve(ROOT, "data/manual/backlinks.csv");
+const KEYWORDS = resolve(ROOT, "data/manual/keywords.csv");
 const OUT = resolve(ROOT, "netlify/lib/blog-seed.mjs");
 
 function parseCsv(text) {
@@ -172,6 +177,136 @@ if (removedByPattern.length) {
   );
 }
 
+/* Audit records, gaps, and the quarterly manual drops --------------------- */
+
+/** A CSV as objects keyed by its own header names, comments stripped. */
+function readTable(path) {
+  if (!existsSync(path)) return [];
+  const body = readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => !/^\s*#/.test(line))
+    .join("\n");
+  const table = parseCsv(body);
+  if (table.length < 2) return [];
+  const header = table[0].map((h) => String(h ?? "").trim());
+  return table.slice(1).map((row) => {
+    const out = {};
+    header.forEach((key, i) => {
+      if (key) out[key] = String(row[i] ?? "").trim();
+    });
+    return out;
+  });
+}
+
+const slugOf = (value) => {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  if (/^https?:\/\//.test(text)) {
+    try {
+      return new URL(text).pathname.replace(/\/+$/, "").split("/").pop() || null;
+    } catch {
+      return null;
+    }
+  }
+  return text.replace(/^\/+|\/+$/g, "").split("/").pop() || null;
+};
+
+const seedBySlug = new Map(seed.map((p) => [slugOf(p.url), p]));
+
+// The audit record is the spec's output contract, and the tracker only reads
+// it: verdicts come from the audit process, never computed here. Joined on
+// slug at build time because post_id needs WordPress, which is a runtime
+// source — the id is carried through for display and for the runtime join.
+const auditRows = readTable(AUDIT);
+const audit = {};
+const auditUnmatched = [];
+for (const row of auditRows) {
+  const slug = slugOf(row.slug || row.url || row.title);
+  const post = slug && seedBySlug.get(slug);
+  if (!post) {
+    if (slug) auditUnmatched.push(slug);
+    continue;
+  }
+  // `absorbed` is not a spec field; it is how a MERGE records that this post
+  // was folded into another, which the health rules need to call it removed.
+  const absorbed = /absorbed|folded/i.test(row.action_detail ?? "") && Boolean(row.redirect_to);
+  audit[canonical(post.url)] = { ...row, absorbed, slug };
+}
+if (auditUnmatched.length) {
+  warnings.push(
+    `${auditUnmatched.length} audit record(s) match no tracked post and were skipped: ${auditUnmatched.slice(0, 5).join(", ")}${auditUnmatched.length > 5 ? "…" : ""}.`,
+  );
+}
+
+const gaps = readTable(GAPS);
+
+// Backlinks and tracked keywords are the two vetoes in the criteria spec, and
+// neither has an API — they are quarterly manual exports. Carried here so the
+// table can show a veto before someone proposes removing a post.
+const backlinks = {};
+for (const row of readTable(BACKLINKS)) {
+  const slug = slugOf(row.url);
+  const post = slug && seedBySlug.get(slug);
+  if (!post) continue;
+  const count = Number(String(row.linking_domains ?? "").replace(/[^\d.-]/g, ""));
+  if (Number.isFinite(count)) backlinks[canonical(post.url)] = count;
+}
+
+const keywords = {};
+for (const row of readTable(KEYWORDS)) {
+  const slug = slugOf(row.target_url);
+  const post = slug && seedBySlug.get(slug);
+  if (!post || !row.keyword) continue;
+  const key = canonical(post.url);
+  (keywords[key] ??= []).push({ keyword: row.keyword, rank: row.rank || null });
+}
+
+/* Thresholds -------------------------------------------------------------- */
+
+let config = {};
+if (existsSync(CONFIG)) {
+  try {
+    config = JSON.parse(readFileSync(CONFIG, "utf8"));
+  } catch (err) {
+    warnings.push(`data/blog-config.json could not be parsed (${err.message}); built-in defaults used.`);
+  }
+} else {
+  warnings.push("No data/blog-config.json — built-in default thresholds used.");
+}
+
+// Defaults are the audit spec's placeholder values. They exist so a missing or
+// partial config file cannot take the tab down, not as a second place to tune:
+// every one of them is overridden by the file.
+const DEFAULTS = {
+  blogPath: "/blog/",
+  health: {
+    windowDays: 90,
+    newWithinDays: 90,
+    decliningDropPct: 30,
+    strikingDistance: { minPosition: 8, maxPosition: 20, minImpressions: 100 },
+    strong: { maxPosition: 10, minClicks: 30 },
+    stable: { minImpressions: 200 },
+  },
+  refreshDue: { staleAfterMonths: 6, healthStatuses: ["strong", "striking-distance", "declining"] },
+  freshness: { freshDays: 180, agingDays: 365, staleDays: 730 },
+  conformance: {
+    requiredHeadings: ["Relevant Chassis", "Top Takeaways"],
+    faqHeadingPattern: "faq|frequently asked",
+    moneyPathPatterns: ["/product/", "/product-category/", "/shop/", "/store/"],
+  },
+};
+
+const merge = (base, over) => {
+  if (!over || typeof over !== "object" || Array.isArray(over)) return over ?? base;
+  const out = { ...base };
+  for (const [key, value] of Object.entries(over)) {
+    if (key.startsWith("_")) continue;
+    out[key] = value && typeof value === "object" && !Array.isArray(value) ? merge(base?.[key] ?? {}, value) : value;
+  }
+  return out;
+};
+const resolvedConfig = merge(DEFAULTS, config);
+
 const withPublished = seed.filter((s) => s.published).length;
 const withModified = seed.filter((s) => s.modified).length;
 
@@ -185,21 +320,34 @@ writeFileSync(
     // curated CSV never had: a hand-entered date should also reach a post the
     // tracker discovers from the live site.
     `export const BLOG_MANUAL_DATES = ${JSON.stringify(Object.fromEntries(manualDates))};\n` +
+    `export const BLOG_CONFIG = ${JSON.stringify(resolvedConfig)};\n` +
+    `export const BLOG_AUDIT = ${JSON.stringify(audit)};\n` +
+    `export const BLOG_GAPS = ${JSON.stringify(gaps)};\n` +
+    `export const BLOG_BACKLINKS = ${JSON.stringify(backlinks)};\n` +
+    `export const BLOG_KEYWORDS = ${JSON.stringify(keywords)};\n` +
     `export const BLOG_SEED_META = ${JSON.stringify({
       count: seed.length,
       withPublished,
       withModified,
       manualDates: manualDates.size,
+      auditRecords: Object.keys(audit).length,
+      auditUnmatched: auditUnmatched.length,
+      gaps: gaps.length,
+      backlinks: Object.keys(backlinks).length,
+      keywordTargets: Object.keys(keywords).length,
       removedByPattern,
       warnings,
       builtAt: new Date().toISOString(),
     })};\n`,
 );
 
+const substantive = Object.values(audit).filter((a) => a.last_substantive_update).length;
 console.log(
   `blog tracker: ${seed.length} curated post(s)` +
     `\n  dates from data/: ${withPublished} published, ${withModified} modified` +
     ` (${manualDates.size} hand-entered in blog-dates.csv)` +
+    `\n  audit: ${Object.keys(audit).length} record(s), ${substantive} with a substantive-update date, ${gaps.length} gap(s)` +
+    `\n  manual: ${Object.keys(backlinks).length} backlink row(s), ${Object.keys(keywords).length} keyword target(s)` +
     `\n  ${explicitExclusions.length} explicit exclusion(s), ${removedByPattern.length} removed by pattern` +
     (warnings.length ? `\n  ${warnings.join("\n  ")}` : ""),
 );

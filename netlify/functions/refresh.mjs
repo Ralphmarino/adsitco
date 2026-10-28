@@ -74,7 +74,10 @@ export default async () => {
   // themselves come from the WordPress API in a few requests; the per-post
   // scrape is a capped fallback so a run does not hammer the site.
   try {
-    const blog = await collectBlogTracker({ scrapeLimit: 25 });
+    // The nightly run is the one that reads every post's content for the
+    // format-conformance columns. It is several megabytes, so a page load
+    // reuses what this worked out rather than fetching it again.
+    const blog = await collectBlogTracker({ scrapeLimit: 25, includeContent: true });
     await writeSnapshot("blog-tracker", blog, "all");
     results.push({
       view: "blog-tracker",
@@ -86,6 +89,10 @@ export default async () => {
       newPosts: blog.totals.new,
       withPublished: blog.totals.withPublished,
       withModified: blog.totals.withModified,
+      refreshDue: blog.totals.refreshDue,
+      audited: blog.totals.audited,
+      conformanceChecked: blog.totals.conformanceChecked,
+      health: blog.health,
       dateSources: blog.dateSources,
       sources: blog.sources.map((s) => ({ id: s.id, ok: s.ok, status: s.status ?? null, resolved: s.resolved ?? null })),
       warnings: blog.warnings,

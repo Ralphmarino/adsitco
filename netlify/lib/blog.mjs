@@ -1,5 +1,24 @@
-import { BLOG_SEED, BLOG_EXCLUSIONS, BLOG_MANUAL_DATES, BLOG_SEED_META } from "./blog-seed.mjs";
+import {
+  BLOG_SEED,
+  BLOG_EXCLUSIONS,
+  BLOG_MANUAL_DATES,
+  BLOG_AUDIT,
+  BLOG_GAPS,
+  BLOG_BACKLINKS,
+  BLOG_KEYWORDS,
+  BLOG_CONFIG,
+  BLOG_SEED_META,
+} from "./blog-seed.mjs";
 import { exclusionFor } from "./blog-rules.mjs";
+import {
+  healthFor,
+  refreshDue,
+  conformanceFor,
+  freshness,
+  daysSince,
+  HEALTH_LABEL,
+  HEALTH_ORDER,
+} from "./blog-health.mjs";
 import {
   fetchSitemap,
   scrapePostDates,
@@ -7,9 +26,9 @@ import {
   SITE_ORIGIN,
   CANDIDATE_PATHS,
 } from "./sitemap.mjs";
-import { fetchPostDates, fetchRecentPosts, WP_API_ROOT } from "./wp-api.mjs";
+import { fetchPostDates, fetchRecentPosts, fetchPostContent, WP_API_ROOT } from "./wp-api.mjs";
 import { describeFailure } from "./site-fetch.mjs";
-import { collectDifferential } from "./differential.mjs";
+import { collectDifferential, collectHealthPerformance } from "./differential.mjs";
 import { readSnapshot, writeSnapshot } from "./store.mjs";
 
 const STATE_KEY = "blog-state";
@@ -34,45 +53,50 @@ async function readState() {
 }
 
 /**
- * Freshness bands. A post is not "stale" at a fixed age — the point is to
- * sort attention, so the bands are wide and the exact day count is shown
- * alongside rather than hidden behind a label.
- */
-function freshness(days) {
-  if (days === null) return { band: "unknown", label: "Unknown" };
-  if (days <= 180) return { band: "fresh", label: "Fresh" };
-  if (days <= 365) return { band: "aging", label: "Aging" };
-  if (days <= 730) return { band: "stale", label: "Stale" };
-  return { band: "very-stale", label: "Very stale" };
-}
-
-/**
- * What to refresh next.
+ * Where to start, within the refresh queue.
  *
- * The question is not "which post is oldest" — it is "where is the most
- * traffic at risk". So the score is the clicks a post still earns, weighted up
- * by how long since it was touched and by how fast it is losing ground. A
- * stale post nobody reads scores low; a high-traffic post sliding for a year
- * scores high.
+ * This orders work; it is not a verdict. The audit spec is explicit that
+ * verdicts come from the audit process and that a prioritisation total is
+ * never presented as one, so the tier is labelled as refresh priority in the
+ * UI and sits in its own column from `verdict`.
+ *
+ * The question it answers is not "which post is oldest" but "where is the
+ * most traffic at risk": the clicks a post still earns, weighted up by how
+ * long since it was touched and by how fast it is losing ground. A stale post
+ * nobody reads scores low; a high-traffic post sliding for a year scores high.
+ *
+ * Health and the refresh-due flag feed in because they know things the raw
+ * numbers do not — striking-distance posts are the cheapest wins on the site,
+ * and a post the spec's own rule says is due outranks one that merely looks
+ * old.
  */
-function priorityFor({ clicks, clicksDelta, days }) {
+function priorityFor({ clicks, clicksDelta, days, health, due }) {
   const traffic = Math.max(clicks, 0);
-  if (!traffic) return { score: 0, tier: "low", reasons: ["No search clicks to protect"] };
 
+  if (health === "removed") return { score: 0, tier: "none", reasons: ["Removed"] };
+
+  const reasons = [];
   const ageWeight = days === null ? 1 : Math.min(1 + days / 365, 3);
   const declinePct = clicks - clicksDelta > 0 ? -clicksDelta / (clicks - clicksDelta) : 0;
   const declineWeight = 1 + Math.max(0, Math.min(declinePct, 1)) * 2;
-  const score = traffic * ageWeight * declineWeight;
+  // A post two positions off page one is worth more than its current clicks
+  // suggest, which is the whole point of the status.
+  const opportunityWeight = health === "striking-distance" ? 1.5 : 1;
+  const score = traffic * ageWeight * declineWeight * opportunityWeight;
 
-  const reasons = [];
-  if (declinePct >= 0.1) reasons.push(`Clicks down ${Math.round(declinePct * 100)}%`);
-  if (days !== null && days > 365) reasons.push(`Not updated in ${Math.round(days / 30)} months`);
+  if (health === "declining") reasons.push("Declining against both the prior period and last year");
+  else if (declinePct >= 0.1) reasons.push(`Clicks down ${Math.round(declinePct * 100)}%`);
+  if (health === "striking-distance") reasons.push("Within reach of page one");
+  if (due) reasons.push("Due a refresh");
+  if (days !== null && days > 365) reasons.push(`Not updated in ${Math.round(days / 30.44)} months`);
+  if (!traffic) reasons.push("No search clicks to protect");
   if (!reasons.length) reasons.push("Holding steady");
 
-  const tier =
-    (declinePct >= 0.1 || (days !== null && days > 365)) && traffic >= 25
+  const tier = !traffic
+    ? "low"
+    : (due || health === "declining" || health === "striking-distance") && traffic >= 25
       ? "high"
-      : declinePct >= 0.1 || (days !== null && days > 540)
+      : due || declinePct >= 0.1 || (days !== null && days > 540)
         ? "medium"
         : "low";
 
@@ -218,7 +242,7 @@ async function gatherLiveDates(urls, { scrapeLimit = 8 } = {}) {
  * posts the CSV never had, stored history turns a changing date into a dated
  * event, and Search Console supplies the trend.
  */
-export async function collectBlogTracker({ scrapeLimit = 8 } = {}) {
+export async function collectBlogTracker({ scrapeLimit = 8, includeContent = false } = {}) {
   const state = await readState();
   const warnings = [...(BLOG_SEED_META.warnings ?? [])];
   const now = today();
@@ -322,52 +346,237 @@ export async function collectBlogTracker({ scrapeLimit = 8 } = {}) {
   }
 
   // --- search performance --------------------------------------------------
+  // Two collections, because they answer different questions. The 6-month
+  // comparison is what the Differential tab shows and what the refresh queue
+  // is ranked on; the 90-day windows, including the same 90 days last year,
+  // are what the audit spec's health rules need.
   let differential = null;
-  try {
-    differential = await collectDifferential({ span: 6, limit: 100000 });
-  } catch (err) {
-    warnings.push(`Search Console performance unavailable (${err.message}).`);
-  }
+  let health = null;
+  const [diffResult, healthResult] = await Promise.allSettled([
+    collectDifferential({ span: 6, limit: 100000 }),
+    collectHealthPerformance({ days: BLOG_CONFIG.health.windowDays }),
+  ]);
+  if (diffResult.status === "fulfilled") differential = diffResult.value;
+  else warnings.push(`Search Console trend unavailable (${diffResult.reason.message}).`);
+  if (healthResult.status === "fulfilled") health = healthResult.value;
+  else warnings.push(`Health windows unavailable (${healthResult.reason.message}).`);
+
   const perf = new Map();
   for (const row of differential?.rows ?? []) perf.set(canonical(row.url), row);
+
+  // Search Console reports whatever URL form the site serves, which may not be
+  // the canonical form used as a key here, so the windows are re-keyed once
+  // rather than guessed at per row.
+  const rekey = (map) => {
+    const out = new Map();
+    for (const [url, value] of map ?? []) out.set(canonical(url), value);
+    return out;
+  };
+  if (health) {
+    health.current = rekey(health.current);
+    health.prior = rekey(health.prior);
+    health.lastYear = rekey(health.lastYear);
+  }
+
+  // --- format conformance --------------------------------------------------
+  // Only when asked, because it is the whole article for every post. The
+  // nightly job asks; a page load reuses whatever the last run worked out.
+  let conformance = new Map();
+  let conformanceRun = null;
+  if (includeContent) {
+    try {
+      const fetched = await fetchPostContent([...tracked.values()].map((p) => p.url));
+      const allUrls = [...tracked.keys()];
+      for (const [url, html] of fetched.content) {
+        const key = canonical(url);
+        conformance.set(key, conformanceFor(html, { allUrls, selfUrl: key }));
+      }
+      // Links in are the mirror of links out, so they are counted once every
+      // post's outbound links are known rather than by scanning twice.
+      const inbound = new Map();
+      for (const [, result] of conformance) {
+        for (const target of result?.linksTo ?? []) inbound.set(target, (inbound.get(target) ?? 0) + 1);
+      }
+      for (const [key, result] of conformance) {
+        if (result) result.internalLinksIn = inbound.get(key) ?? 0;
+      }
+      conformanceRun = { checked: conformance.size, wanted: fetched.wanted, failed: fetched.failed.length };
+      if (fetched.failed.length) {
+        warnings.push(`Content for ${fetched.failed.length} batch(es) could not be read, so their conformance is unknown.`);
+      }
+    } catch (err) {
+      warnings.push(`Format conformance unavailable (${err.message}).`);
+    }
+  } else {
+    // Carried over from the last run that did check, so the column does not
+    // empty out between nightly runs.
+    for (const [key, stored] of Object.entries(state.conformance ?? {})) conformance.set(key, stored);
+  }
 
   // --- assemble ------------------------------------------------------------
   const rows = [];
   for (const [key, post] of tracked) {
     const stored = nextState.urls[key];
     const p = perf.get(key);
+    const audit = BLOG_AUDIT[key] ?? null;
+    const wp = live.wp.get(key);
+
     const clicks = p?.period.recent.clicks ?? 0;
     const clicksDelta = p?.period.delta.clicks ?? 0;
-    const days = daysBetween(stored.lastmod);
-    const priority = priorityFor({ clicks, clicksDelta, days });
+
+    // The spec is explicit that WordPress `modified` moves on any save and
+    // cannot stand in for the date of the last real revision. So the age
+    // column prefers the hand-recorded substantive date and says which one it
+    // used, rather than quietly presenting a typo fix as a refresh.
+    const substantive = audit?.last_substantive_update || null;
+    const ageBasis = substantive ? "substantive" : stored.lastmod ? "modified" : null;
+    const days = daysSince(substantive ?? stored.lastmod);
+
+    const current = health?.current.get(key) ?? null;
+    const priorWindow = health?.prior.get(key) ?? null;
+    const lastYear = health?.lastYear.get(key) ?? null;
+
+    const healthResultRow = healthFor({
+      current,
+      prior: priorWindow,
+      lastYear,
+      published: stored.published,
+      lastSubstantiveUpdate: substantive,
+      audit,
+    });
+    const due = refreshDue({
+      lastSubstantiveUpdate: substantive,
+      modified: stored.lastmod,
+      health: healthResultRow.status,
+    });
+    const priority = priorityFor({
+      clicks,
+      clicksDelta,
+      days,
+      health: healthResultRow.status,
+      due: due.due,
+    });
+
+    const conf = conformance.get(key) ?? null;
+    const backlinks = BLOG_BACKLINKS[key] ?? null;
+    const trackedKeywords = BLOG_KEYWORDS[key] ?? [];
 
     rows.push({
       url: post.url,
-      title: post.title || live.wp.get(key)?.title || "",
+      postId: wp?.id ?? (audit?.post_id ? Number(audit.post_id) || audit.post_id : null),
+      slug: post.url.replace(/\/+$/, "").split("/").pop(),
+      title: post.title || wp?.title || "",
       source: post.source,
+
+      // Dates, and where each came from.
       published: stored.published,
       publishedSource: stored.publishedSource,
       lastmod: stored.lastmod,
       modifiedSource: stored.modifiedSource,
+      lastSubstantiveUpdate: substantive,
+      ageBasis,
       daysSinceUpdate: days,
-      daysSincePublished: daysBetween(stored.published),
+      daysSinceModified: daysSince(stored.lastmod),
+      daysSincePublished: daysSince(stored.published),
       freshness: freshness(days),
       inSitemap: stored.inSitemap,
       observedUpdates: stored.observedUpdates.length,
       lastObservedUpdate: stored.observedUpdates.at(-1)?.at ?? null,
+
+      // Performance: the 6-month comparison the queue is ranked on.
       clicks,
       clicksPrior: p?.period.prior.clicks ?? 0,
       clicksDelta,
       impressions: p?.period.recent.impressions ?? 0,
       impressionsDelta: p?.period.delta.impressions ?? 0,
+      ctr: p?.period.recent.ctr ?? 0,
       position: p?.period.recent.position ?? 0,
       positionDelta: p?.period.delta.position ?? 0,
       hasPerformance: Boolean(p),
+
+      // Health: the 90-day windows, including last year.
+      health: healthResultRow.status,
+      healthLabel: HEALTH_LABEL[healthResultRow.status],
+      healthReasons: healthResultRow.reasons,
+      window: current
+        ? {
+            clicks: current.clicks,
+            impressions: current.impressions,
+            ctr: current.ctr,
+            position: current.position,
+            priorClicks: priorWindow?.clicks ?? 0,
+            lastYearClicks: lastYear?.clicks ?? 0,
+          }
+        : null,
+
+      refreshDue: due.due,
+      refreshReason: due.reason,
+
+      // The audit record, read and never written.
+      audit: audit
+        ? {
+            postId: audit.post_id || null,
+            batch: audit.batch || null,
+            cluster: audit.cluster || null,
+            mainCategory: audit.main_category || null,
+            secondaryCategory: audit.secondary_category || null,
+            tags: (audit.tags || "").split(/[,;|]/).map((t) => t.trim()).filter(Boolean),
+            currentVoice: audit.current_voice || null,
+            topicIntentVoice: audit.topic_intent_voice || null,
+            voiceMatch:
+              audit.current_voice && audit.topic_intent_voice
+                ? audit.current_voice === audit.topic_intent_voice
+                : null,
+            verdict: audit.verdict || null,
+            confidence: audit.confidence || null,
+            primaryReason: audit.primary_reason || null,
+            dimensionFlags: (audit.dimension_flags || "").split(/[,;|]/).map((t) => t.trim()).filter(Boolean),
+            actionDetail: audit.action_detail || null,
+            reviewFlags: (audit.review_flags || "").split(/(?=\[)/).map((t) => t.trim()).filter(Boolean),
+            status: audit.audit_status || null,
+            imageStyle: audit.image_style || null,
+            voiceIssues: audit.voice_issues ? Number(audit.voice_issues) || 0 : 0,
+            dateReviewed: audit.date_reviewed || null,
+            dateExecuted: audit.date_executed || null,
+            redirectTo: audit.redirect_to || null,
+            // The audit record's own conformance call, which is a human
+            // reading the post. The computed one below is a heading check.
+            formatConforms: audit.format_conforms ? /^y/i.test(audit.format_conforms) : null,
+          }
+        : null,
+
+      conformance: conf
+        ? {
+            formatConforms: conf.formatConforms,
+            missingHeadings: conf.missingHeadings,
+            hasFaqs: conf.hasFaqs,
+            internalLinksOut: conf.internalLinksOut,
+            moneyLinksOut: conf.moneyLinksOut,
+            internalLinksIn: conf.internalLinksIn ?? 0,
+          }
+        : null,
+
+      backlinks,
+      trackedKeywords,
+      // The two vetoes in the criteria spec: neither is a judgement, both are
+      // reasons a REMOVE cannot be finalised without a second look.
+      vetoes: [
+        ...(backlinks > 0 ? [{ id: "backlink-hold", label: `${backlinks} linking domain(s)` }] : []),
+        ...(trackedKeywords.length
+          ? [{ id: "consultant-review", label: `${trackedKeywords.length} tracked keyword(s)` }]
+          : []),
+      ],
+
+      categoryIds: wp?.categoryIds ?? [],
+      tagIds: wp?.tagIds ?? [],
       priority,
     });
   }
 
   rows.sort((a, b) => b.priority.score - a.priority.score);
+  // Conformance is expensive to work out and cheap to keep, so it rides along
+  // in the state blob for the runs that do not recompute it.
+  nextState.conformance = Object.fromEntries(conformance);
   await writeSnapshot(STATE_KEY, nextState, "all");
 
   const counts = {};
@@ -414,7 +623,10 @@ export async function collectBlogTracker({ scrapeLimit = 8 } = {}) {
     sitemapUrl: live.sources.find((s) => s.id === "sitemap")?.url ?? SITEMAP_URL,
     sitemapError: live.sitemapReadable ? null : live.sources.find((s) => s.id === "sitemap")?.error ?? null,
     windows: differential?.windows ?? null,
+    healthWindows: health?.windows ?? null,
+    thresholds: BLOG_CONFIG,
     rows,
+    gaps: BLOG_GAPS,
     totals: {
       tracked: rows.length,
       curated: rows.filter((r) => r.source === "curated").length,
@@ -425,12 +637,42 @@ export async function collectBlogTracker({ scrapeLimit = 8 } = {}) {
       sitemapEntries: live.sitemapReadable ? live.sitemapEntries.length : null,
       filteredOut: filteredOut.length,
       filteredByRule: counts,
+
+      // The audit layer. Counted separately from `tracked` because an empty
+      // audit column means the audit has not reached that post, which is not
+      // the same as a post with no findings.
+      audited: rows.filter((r) => r.audit).length,
+      withSubstantiveDate: rows.filter((r) => r.lastSubstantiveUpdate).length,
+      refreshDue: rows.filter((r) => r.refreshDue).length,
+      conformanceChecked: rows.filter((r) => r.conformance).length,
+      formatConforms: rows.filter((r) => r.conformance?.formatConforms).length,
+      hasFaqs: rows.filter((r) => r.conformance?.hasFaqs).length,
+      legacyImages: rows.filter((r) => r.audit?.imageStyle === "legacy").length,
+      voiceMismatch: rows.filter((r) => r.audit?.voiceMatch === false).length,
+      withVetoes: rows.filter((r) => r.vetoes.length).length,
+      gaps: BLOG_GAPS.length,
     },
+    health: HEALTH_ORDER.reduce((acc, status) => {
+      const count = rows.filter((r) => r.health === status).length;
+      if (count) acc[status] = count;
+      return acc;
+    }, {}),
+    verdicts: rows.reduce((acc, r) => {
+      const key = r.audit?.verdict || "unassigned";
+      acc[key] = (acc[key] ?? 0) + 1;
+      return acc;
+    }, {}),
+    auditStatuses: rows.reduce((acc, r) => {
+      if (!r.audit?.status) return acc;
+      acc[r.audit.status] = (acc[r.audit.status] ?? 0) + 1;
+      return acc;
+    }, {}),
     dateSources: rows.reduce((acc, r) => {
       const key = r.publishedSource ?? "none";
       acc[key] = (acc[key] ?? 0) + 1;
       return acc;
     }, {}),
+    conformanceRun,
     scrape: {
       attempted: live.scrape.attempted,
       resolved: live.scrape.resolved,
@@ -439,6 +681,90 @@ export async function collectBlogTracker({ scrapeLimit = 8 } = {}) {
     },
     warnings,
   };
+}
+
+/* Export ------------------------------------------------------------------ */
+
+const CSV_COLUMNS = [
+  ["post_id", (r) => r.postId],
+  ["slug", (r) => r.slug],
+  ["url", (r) => r.url],
+  ["title", (r) => r.title],
+  ["published", (r) => r.published],
+  ["published_source", (r) => r.publishedSource],
+  ["modified", (r) => r.lastmod],
+  ["modified_source", (r) => r.modifiedSource],
+  ["last_substantive_update", (r) => r.lastSubstantiveUpdate],
+  ["days_since_update", (r) => r.daysSinceUpdate],
+  ["age_basis", (r) => r.ageBasis],
+  ["freshness", (r) => r.freshness.label],
+  ["health", (r) => r.health],
+  ["health_reason", (r) => r.healthReasons.join("; ")],
+  ["refresh_due", (r) => (r.refreshDue ? "yes" : "no")],
+  ["refresh_reason", (r) => r.refreshReason],
+  ["refresh_priority", (r) => r.priority.tier],
+  ["priority_score", (r) => r.priority.score],
+  ["clicks_6mo", (r) => r.clicks],
+  ["clicks_6mo_prior", (r) => r.clicksPrior],
+  ["clicks_diff", (r) => r.clicksDelta],
+  ["impressions_6mo", (r) => r.impressions],
+  ["impressions_diff", (r) => r.impressionsDelta],
+  ["ctr_6mo", (r) => (r.ctr ? (r.ctr * 100).toFixed(2) : "")],
+  ["position_6mo", (r) => (r.position ? r.position.toFixed(1) : "")],
+  ["position_diff", (r) => (r.positionDelta ? r.positionDelta.toFixed(1) : "")],
+  ["clicks_90d", (r) => r.window?.clicks ?? ""],
+  ["clicks_90d_prior", (r) => r.window?.priorClicks ?? ""],
+  ["clicks_90d_last_year", (r) => r.window?.lastYearClicks ?? ""],
+  ["position_90d", (r) => (r.window?.position ? r.window.position.toFixed(1) : "")],
+  ["batch", (r) => r.audit?.batch],
+  ["cluster", (r) => r.audit?.cluster],
+  ["main_category", (r) => r.audit?.mainCategory],
+  ["secondary_category", (r) => r.audit?.secondaryCategory],
+  ["tags", (r) => r.audit?.tags.join("; ")],
+  ["current_voice", (r) => r.audit?.currentVoice],
+  ["topic_intent_voice", (r) => r.audit?.topicIntentVoice],
+  ["verdict", (r) => r.audit?.verdict],
+  ["confidence", (r) => r.audit?.confidence],
+  ["primary_reason", (r) => r.audit?.primaryReason],
+  ["dimension_flags", (r) => r.audit?.dimensionFlags.join("; ")],
+  ["action_detail", (r) => r.audit?.actionDetail],
+  ["review_flags", (r) => r.audit?.reviewFlags.join(" ")],
+  ["audit_status", (r) => r.audit?.status],
+  ["image_style", (r) => r.audit?.imageStyle],
+  ["voice_issues", (r) => r.audit?.voiceIssues],
+  ["date_reviewed", (r) => r.audit?.dateReviewed],
+  ["date_executed", (r) => r.audit?.dateExecuted],
+  ["redirect_to", (r) => r.audit?.redirectTo],
+  ["format_conforms", (r) => (r.conformance ? (r.conformance.formatConforms ? "yes" : "no") : "")],
+  ["missing_headings", (r) => r.conformance?.missingHeadings.join("; ")],
+  ["has_faqs", (r) => (r.conformance ? (r.conformance.hasFaqs ? "yes" : "no") : "")],
+  ["internal_links_out", (r) => r.conformance?.internalLinksOut ?? ""],
+  ["money_links_out", (r) => r.conformance?.moneyLinksOut ?? ""],
+  ["internal_links_in", (r) => r.conformance?.internalLinksIn ?? ""],
+  ["linking_domains", (r) => r.backlinks ?? ""],
+  ["tracked_keywords", (r) => r.trackedKeywords.map((k) => `${k.keyword}${k.rank ? ` (#${k.rank})` : ""}`).join("; ")],
+  ["vetoes", (r) => r.vetoes.map((v) => v.id).join("; ")],
+  ["observed_updates", (r) => r.observedUpdates],
+  ["last_observed_update", (r) => r.lastObservedUpdate],
+  ["in_sitemap", (r) => (r.inSitemap ? "yes" : "no")],
+  ["discovered", (r) => (r.source === "new" ? "yes" : "no")],
+];
+
+/**
+ * The whole tracker as a CSV, in the audit record's own field names.
+ *
+ * The table on the page shows what fits; this is for the spreadsheet work the
+ * audit actually runs on, and it round-trips: the columns an audit record
+ * owns come back out under the names `audit-records.csv` uses.
+ */
+export function blogCsv(rows) {
+  const cell = (value) => {
+    const text = value === null || value === undefined ? "" : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const lines = [CSV_COLUMNS.map(([name]) => name).join(",")];
+  for (const row of rows) lines.push(CSV_COLUMNS.map(([, read]) => cell(read(row))).join(","));
+  return lines.join("\n");
 }
 
 /**

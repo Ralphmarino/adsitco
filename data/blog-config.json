@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Thresholds and site-specific patterns for the blog tracker. Per the",
+    "tracker spec's guardrail, these live here rather than in code so they can",
+    "be tuned after a couple of months of data without a code change.",
+    "",
+    "The spec asks for config.yml. This is JSON because reading YAML would mean",
+    "adding a dependency to a project that currently has exactly one, and every",
+    "value the spec names is here under the same names.",
+    "",
+    "Starting values are the spec's placeholders. Tune them."
+  ],
+
+  "blogPath": "/blog/",
+
+  "health": {
+    "windowDays": 90,
+    "newWithinDays": 90,
+    "decliningDropPct": 30,
+    "strikingDistance": { "minPosition": 8, "maxPosition": 20, "minImpressions": 100 },
+    "strong": { "maxPosition": 10, "minClicks": 30 },
+    "stable": { "minImpressions": 200 }
+  },
+
+  "refreshDue": {
+    "staleAfterMonths": 6,
+    "healthStatuses": ["strong", "striking-distance", "declining"]
+  },
+
+  "freshness": {
+    "_comment": "Bands behind the days-since-update column. Wide on purpose: they sort attention, they do not make the call.",
+    "freshDays": 180,
+    "agingDays": 365,
+    "staleDays": 730
+  },
+
+  "conformance": {
+    "_comment": "Headings that mark a post as converted to the current Content Guide form.",
+    "requiredHeadings": ["Relevant Chassis", "Top Takeaways"],
+    "faqHeadingPattern": "faq|frequently asked",
+    "moneyPathPatterns": ["/product/", "/product-category/", "/shop/", "/store/"],
+    "_moneyPathsVerify": "[VERIFY] Confirm the real product and category URL patterns on adsitco.com; anything not matched here counts as a non-money internal link."
+  }
+}

@@ -49,6 +49,66 @@ async function totalsIn({ start, end }) {
   };
 }
 
+/**
+ * The three windows the audit spec's health rules need: the latest 90 days,
+ * the 90 before that, and the same 90 days a year earlier.
+ *
+ * The year-ago window is the part that earns its request. Clicks down 40% on
+ * the previous quarter is ambiguous on a site selling convertible parts — it
+ * could be decay or it could be October. Down 40% on the previous quarter AND
+ * on the same quarter last year is decay.
+ */
+export function healthWindows({ days = 90, lagDays = 3 } = {}) {
+  const end = daysAgo(lagDays);
+  const start = shiftDays(end, -(days - 1));
+  const priorEnd = shiftDays(start, -1);
+  const priorStart = shiftDays(priorEnd, -(days - 1));
+  const yearShift = (iso) => {
+    const d = new Date(`${iso}T00:00:00Z`);
+    d.setUTCFullYear(d.getUTCFullYear() - 1);
+    return d.toISOString().slice(0, 10);
+  };
+
+  const label = (a, b) => {
+    const fmt = (iso) =>
+      new Date(`${iso}T00:00:00Z`).toLocaleDateString("en-US", {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "UTC",
+      });
+    return `${fmt(a)} – ${fmt(b)}`;
+  };
+
+  return {
+    days,
+    current: { start, end, label: label(start, end) },
+    prior: { start: priorStart, end: priorEnd, label: label(priorStart, priorEnd) },
+    lastYear: { start: yearShift(start), end: yearShift(end), label: label(yearShift(start), yearShift(end)) },
+  };
+}
+
+/**
+ * Per-URL clicks, impressions, CTR and position across those three windows.
+ * Three page-level queries, whatever the number of posts.
+ */
+export async function collectHealthPerformance({ days = 90 } = {}) {
+  const windows = healthWindows({ days });
+  const [current, prior, lastYear] = await Promise.all([
+    pagesIn(windows.current),
+    pagesIn(windows.prior),
+    pagesIn(windows.lastYear),
+  ]);
+
+  return {
+    windows,
+    current: current.map,
+    prior: prior.map,
+    lastYear: lastYear.map,
+    truncated: current.truncated || prior.truncated || lastYear.truncated,
+  };
+}
+
 /* Month windows ----------------------------------------------------------- */
 
 const monthStart = (y, m) => `${y}-${String(m).padStart(2, "0")}-01`;

@@ -25,7 +25,14 @@ const API_ROOT = process.env.BLOG_WP_API_ROOT || "https://www.adsitco.com/wp-jso
 // string comfortably short even with long slugs.
 const SLUG_CHUNK = 40;
 
-const FIELDS = "link,slug,date,modified,status,title";
+// `id` is the audit spec's join key across every source, so it comes back on
+// every request even though nothing here looks a post up by it.
+const FIELDS = "id,link,slug,date,modified,status,title,categories,tags,featured_media";
+
+// Rendered content, for the conformance checks. Asked for separately because
+// it is two orders of magnitude more bytes than the dates and is only needed
+// by the nightly job.
+const CONTENT_FIELDS = "id,link,slug,content";
 
 const isoDay = (value) => {
   const text = String(value ?? "").trim();
@@ -53,12 +60,19 @@ const chunk = (items, size) => {
 
 function normalise(post) {
   return {
+    id: post.id ?? null,
     url: post.link ?? null,
     slug: post.slug ?? null,
     published: isoDay(post.date),
     modified: isoDay(post.modified),
     title: decodeEntities(post.title?.rendered ?? ""),
     status: post.status ?? null,
+    // Term IDs, not names. Resolving them would be two more requests for
+    // something the audit records carry as text anyway; they are here so a
+    // category or tag the audit has not reached is still visible as an id.
+    categoryIds: Array.isArray(post.categories) ? post.categories : [],
+    tagIds: Array.isArray(post.tags) ? post.tags : [],
+    featuredMedia: post.featured_media || null,
   };
 }
 
@@ -110,6 +124,44 @@ export async function fetchRecentPosts({ limit = 100 } = {}) {
   );
   if (!Array.isArray(data)) throw new SiteFetchError(API_ROOT, null, "unexpected API response");
   return data.map(normalise);
+}
+
+/**
+ * Rendered post content, for the format-conformance checks.
+ *
+ * Separate from `fetchPostDates` and asked for in smaller batches because the
+ * payload is the whole article: a hundred posts is several megabytes, so this
+ * runs on the nightly job and not on a page load. A chunk that fails is
+ * skipped rather than failing the run — conformance on 90 posts is worth more
+ * than an error on all of them.
+ */
+export async function fetchPostContent(urls, { chunkSize = 10 } = {}) {
+  const wanted = new Map();
+  for (const url of urls) {
+    const slug = blogSlug(url);
+    if (slug) wanted.set(slug, url);
+  }
+
+  const content = new Map();
+  const failed = [];
+  let requests = 0;
+
+  for (const slugs of chunk([...wanted.keys()], chunkSize)) {
+    const query = slugs.map((s) => `slug[]=${encodeURIComponent(s)}`).join("&");
+    try {
+      const { data } = await fetchJson(
+        `${API_ROOT}/posts?${query}&per_page=100&_fields=${CONTENT_FIELDS}`,
+      );
+      requests += 1;
+      for (const post of Array.isArray(data) ? data : []) {
+        if (post.link) content.set(post.link, post.content?.rendered ?? "");
+      }
+    } catch (err) {
+      failed.push({ slugs: slugs.length, error: err.message });
+    }
+  }
+
+  return { content, failed, requests, wanted: wanted.size };
 }
 
 export { API_ROOT as WP_API_ROOT };

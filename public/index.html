@@ -493,12 +493,29 @@
         <div class="diffbar">
           <div class="segmented" role="group" aria-label="View">
             <button class="segmented__btn is-active" type="button" data-blog="priority">Refresh priority</button>
+            <button class="segmented__btn" type="button" data-blog="due">Refresh due</button>
+            <button class="segmented__btn" type="button" data-blog="striking">Striking distance</button>
             <button class="segmented__btn" type="button" data-blog="stale">Oldest first</button>
             <button class="segmented__btn" type="button" data-blog="declining">Losing clicks</button>
             <button class="segmented__btn" type="button" data-blog="new">New posts</button>
           </div>
           <input class="field__control field__control--search" id="blog-search" type="search"
                  placeholder="Filter posts…" aria-label="Filter posts" />
+          <a class="btn" id="blog-csv" href="/api/blog?format=csv" download>Download all fields (CSV)</a>
+        </div>
+
+        <!-- Health and verdict are different questions — one is computed from
+             Search Console, the other comes from the audit — so they filter
+             separately rather than sharing one control. -->
+        <div class="chipfilters" id="blog-filters" hidden>
+          <div class="chipfilters__group">
+            <span class="chipfilters__label" id="blog-health-label">Health</span>
+            <span class="chipset" id="blog-health-chips" role="group" aria-labelledby="blog-health-label"></span>
+          </div>
+          <div class="chipfilters__group" id="blog-verdict-group" hidden>
+            <span class="chipfilters__label" id="blog-verdict-label">Verdict</span>
+            <span class="chipset" id="blog-verdict-chips" role="group" aria-labelledby="blog-verdict-label"></span>
+          </div>
         </div>
 
         <section aria-labelledby="blog-summary-heading">
@@ -508,14 +525,36 @@
           <div class="tiles" id="blog-tiles"></div>
         </section>
 
-        <section class="panel" aria-labelledby="blog-age-heading">
+        <div class="grid-2">
+          <section class="panel" aria-labelledby="blog-health-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="blog-health-heading">Posts by health</h2>
+                <p class="panel__sub" id="blog-health-sub"></p>
+              </div>
+            </div>
+            <div class="chart" id="blog-health-chart"></div>
+          </section>
+
+          <section class="panel" aria-labelledby="blog-age-heading">
+            <div class="panel__head">
+              <div>
+                <h2 class="panel__title" id="blog-age-heading">Posts by age since last update</h2>
+                <p class="panel__sub" id="blog-age-sub"></p>
+              </div>
+            </div>
+            <div class="chart" id="blog-age-chart"></div>
+          </section>
+        </div>
+
+        <section class="panel" aria-labelledby="blog-conformance-heading" id="blog-conformance-panel" hidden>
           <div class="panel__head">
             <div>
-              <h2 class="panel__title" id="blog-age-heading">Posts by age since last update</h2>
-              <p class="panel__sub" id="blog-age-sub"></p>
+              <h2 class="panel__title" id="blog-conformance-heading">Format and image conformance</h2>
+              <p class="panel__sub" id="blog-conformance-sub"></p>
             </div>
           </div>
-          <div class="chart" id="blog-age-chart"></div>
+          <div class="tiles" id="blog-conformance-tiles"></div>
         </section>
 
         <section class="panel" aria-labelledby="blog-table-heading">

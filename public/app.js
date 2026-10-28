@@ -7,7 +7,17 @@ const PASSWORD_KEY = "adsitco-report-password";
 const salesState = { from: null, to: null, data: null, loading: null };
 
 /** The Differential tab: GSC movement per URL, on its own endpoint. */
-const blogState = { view: "priority", search: "", data: null, loading: null };
+const blogState = {
+  view: "priority",
+  search: "",
+  // Empty means "all". Two sets rather than one because health is computed
+  // from Search Console and a verdict is a human decision from the audit —
+  // narrowing by one should not narrow by the other.
+  health: new Set(),
+  verdict: new Set(),
+  data: null,
+  loading: null,
+};
 
 const diffState = { mode: "period", search: "", sort: "delta", dir: "desc", data: null, loading: null };
 
@@ -1596,6 +1606,19 @@ async function ensureBlogLoaded() {
   return blogState.loading;
 }
 
+// The audit spec's health statuses, in the order its rules are evaluated, so
+// the chart reads top-down as "needs attention" to "fine".
+const HEALTH_BANDS = [
+  { status: "declining", label: "Declining" },
+  { status: "striking-distance", label: "Striking distance" },
+  { status: "strong", label: "Strong" },
+  { status: "stable", label: "Stable" },
+  { status: "weak", label: "Weak" },
+  { status: "new", label: "New" },
+  { status: "removed", label: "Removed" },
+  { status: "unknown", label: "No data" },
+];
+
 const AGE_BANDS = [
   { band: "fresh", label: "Under 6 months" },
   { band: "aging", label: "6–12 months" },
@@ -1603,6 +1626,18 @@ const AGE_BANDS = [
   { band: "very-stale", label: "Over 2 years" },
   { band: "unknown", label: "No date" },
 ];
+
+// A date is only as good as where it came from, and these come from five
+// different places. The cell shows the date; the tooltip shows the source, so
+// "hand-entered" and "left over from an earlier run" are distinguishable from
+// each other and from "unknown" without another column.
+const SOURCE_LABEL = {
+  manual: "entered by hand in data/blog-dates.csv",
+  wp: "the WordPress API",
+  sitemap: "the sitemap",
+  html: "the post's page",
+  stored: "an earlier run",
+};
 
 function monthsAgo(days) {
   if (days === null) return "—";
@@ -1685,14 +1720,43 @@ function renderBlog() {
     return card;
   };
 
+  const due = rows.filter((r) => r.refreshDue);
+  const striking = rows.filter((r) => r.health === "striking-distance");
+
   document.getElementById("blog-tiles").replaceChildren(
     plain("Posts tracked", int.format(t.tracked ?? 0), `${t.curated ?? 0} curated · ${t.new ?? 0} new`),
-    plain("Needing a refresh", int.format(high.length), "High priority"),
+    // The spec's own rule — stale past the configured window and worth the
+    // effort — so this is the number that drives the work, with the looser
+    // "high priority" count beside it.
+    plain("Due a refresh", int.format(due.length), `${int.format(high.length)} high priority`),
+    plain("Striking distance", int.format(striking.length), "Within reach of page one"),
     plain("Not updated in a year", int.format(stale.length), `${rows.length ? Math.round((stale.length / rows.length) * 100) : 0}% of posts`),
-    plain("Losing clicks", int.format(declining.length), "vs the previous 6 months"),
     plain("Median age", median === null ? "—" : monthsAgo(median), "Since last update"),
-    plain("Publication dates", `${t.withPublished ?? 0}/${t.tracked ?? 0}`, "Known"),
+    plain(
+      "Audited",
+      `${t.audited ?? 0}/${t.tracked ?? 0}`,
+      t.withSubstantiveDate ? `${t.withSubstantiveDate} with a substantive date` : "No audit records yet",
+    ),
   );
+
+  // Health first: it is the question the audit asks of every post, and the
+  // order is the order its rules fire in, so the top of the chart is the work.
+  const healthCounts = new Map(HEALTH_BANDS.map((b) => [b.status, 0]));
+  for (const r of rows) healthCounts.set(r.health, (healthCounts.get(r.health) ?? 0) + 1);
+  const hw = data.healthWindows;
+  document.getElementById("blog-health-sub").textContent = hw
+    ? `${hw.days} days to ${hw.current.end}, against the previous ${hw.days} days and the same days last year.`
+    : "Search Console windows unavailable, so health could not be computed.";
+  barChart(document.getElementById("blog-health-chart"), {
+    rows: HEALTH_BANDS.filter((b) => healthCounts.get(b.status)).map((b) => ({
+      name: b.label,
+      value: healthCounts.get(b.status),
+      detail: [{ label: "Posts", value: int.format(healthCounts.get(b.status)) }],
+    })),
+    color: surfaceColor("--series-1"),
+    format: fmt.count,
+    labelWidth: 150,
+  });
 
   // Distribution of ages, so the shape of the backlog is visible before any
   // individual post is.
@@ -1701,9 +1765,11 @@ function renderBlog() {
   const modifiedFrom = answered.length
     ? answered.map((s) => s.label).join(" and ")
     : "the last successful read";
+  const substantiveNote = t.withSubstantiveDate
+    ? ` ${t.withSubstantiveDate} post(s) have a hand-recorded substantive-update date, which takes precedence.`
+    : " None has a hand-recorded substantive-update date yet, so these are save dates.";
   document.getElementById("blog-age-sub").textContent =
-    `Last-updated dates come from ${modifiedFrom} and refresh nightly.` +
-    (t.withModified != null && t.tracked ? ` ${t.withModified} of ${t.tracked} posts have one.` : "");
+    `Last-updated dates come from ${modifiedFrom} and refresh nightly.` + substantiveNote;
   barChart(document.getElementById("blog-age-chart"), {
     rows: AGE_BANDS.filter((b) => counts.get(b.band)).map((b) => ({
       name: b.label,
@@ -1715,11 +1781,26 @@ function renderBlog() {
     labelWidth: 150,
   });
 
+  renderBlogConformance(data, rows);
+  renderBlogFilters(data, rows);
+
+  // Filters narrow; the view sorts and, for the queue views, also narrows.
   const term = blogState.search.trim().toLowerCase();
   let shown = rows.filter(
     (r) => !term || r.url.toLowerCase().includes(term) || (r.title || "").toLowerCase().includes(term),
   );
-  if (blogState.view === "stale") {
+  if (blogState.health.size) shown = shown.filter((r) => blogState.health.has(r.health));
+  if (blogState.verdict.size) {
+    shown = shown.filter((r) => blogState.verdict.has(r.audit?.verdict || "unassigned"));
+  }
+
+  if (blogState.view === "due") {
+    shown = shown.filter((r) => r.refreshDue).sort((a, b) => b.priority.score - a.priority.score);
+  } else if (blogState.view === "striking") {
+    shown = shown
+      .filter((r) => r.health === "striking-distance")
+      .sort((a, b) => b.impressions - a.impressions);
+  } else if (blogState.view === "stale") {
     shown = [...shown].sort((a, b) => (b.daysSinceUpdate ?? -1) - (a.daysSinceUpdate ?? -1));
   } else if (blogState.view === "declining") {
     shown = shown.filter((r) => r.clicksDelta < 0).sort((a, b) => a.clicksDelta - b.clicksDelta);
@@ -1729,12 +1810,132 @@ function renderBlog() {
     shown = [...shown].sort((a, b) => b.priority.score - a.priority.score);
   }
 
+  const SUBS = {
+    priority: "Ordered by clicks at risk: traffic the post still earns, weighted by how long since it was touched and how fast it is sliding. This orders work — it is not a verdict.",
+    due: "Stale past the configured window and healthy enough to be worth the effort. Both conditions have to hold.",
+    striking: "Ranking 8–20 with real impressions: the cheapest wins on the site, ordered by impressions.",
+  };
   document.getElementById("blog-table-sub").textContent =
-    blogState.view === "priority"
-      ? "Ranked by clicks at risk: traffic the post still earns, weighted by how long since it was touched and how fast it is sliding."
-      : `${shown.length} post(s)`;
+    `${shown.length} post(s)${SUBS[blogState.view] ? ` · ${SUBS[blogState.view]}` : ""}`;
 
   renderBlogTable(document.getElementById("blog-table"), shown);
+}
+
+/**
+ * Conformance to the current post format, summarised.
+ *
+ * Hidden entirely until the nightly job has read the posts: a row of "0 of 0"
+ * tiles would read as every post failing, which is the opposite of the truth.
+ */
+function renderBlogConformance(data, rows) {
+  const panel = document.getElementById("blog-conformance-panel");
+  const t = data.totals ?? {};
+  const checked = t.conformanceChecked ?? 0;
+  if (!checked) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+
+  const tile = (label, value, sub) => {
+    const card = document.createElement("div");
+    card.className = "tile";
+    const l = document.createElement("p");
+    l.className = "tile__label";
+    l.textContent = label;
+    const v = document.createElement("p");
+    v.className = "tile__value";
+    v.textContent = value;
+    card.append(l, v);
+    if (sub) {
+      const s = document.createElement("p");
+      s.className = "tile__delta";
+      s.textContent = sub;
+      card.appendChild(s);
+    }
+    return card;
+  };
+
+  const money = rows.filter((r) => (r.conformance?.moneyLinksOut ?? 0) > 0).length;
+  const orphans = rows.filter((r) => r.conformance && r.conformance.internalLinksIn === 0).length;
+  document.getElementById("blog-conformance-sub").textContent =
+    `Read from the posts themselves on the nightly run: ${checked} of ${t.tracked} checked. ` +
+    `A post conforms when it carries ${(data.thresholds?.conformance?.requiredHeadings ?? []).join(" and ")} headings.`;
+
+  document.getElementById("blog-conformance-tiles").replaceChildren(
+    tile("In the current format", `${t.formatConforms ?? 0}/${checked}`, "Has both required sections"),
+    tile("Has FAQs", `${t.hasFaqs ?? 0}/${checked}`, "FAQ section present"),
+    tile("Links to a money page", `${money}/${checked}`, "At least one product or category link"),
+    // An orphan is safe to cut and a hub is not, which is the spec's own
+    // cluster-role check — so it is worth a tile rather than a column nobody
+    // scrolls to.
+    tile("Not linked from any post", int.format(orphans), "Orphans — safe to cut"),
+    tile("Legacy featured image", int.format(t.legacyImages ?? 0), "From the audit records"),
+    tile("Voice mismatch", int.format(t.voiceMismatch ?? 0), "Current voice ≠ topic intent"),
+  );
+}
+
+/** Health and verdict filter chips, each with its count. */
+function renderBlogFilters(data, rows) {
+  const bar = document.getElementById("blog-filters");
+  bar.hidden = false;
+
+  const build = (container, entries, selected, onToggle) => {
+    container.replaceChildren();
+    for (const { key, label, count } of entries) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = `chip${selected.has(key) ? " chip--on" : ""}`;
+      chip.setAttribute("aria-pressed", String(selected.has(key)));
+      chip.textContent = label;
+      const n = document.createElement("span");
+      n.className = "chip__count";
+      n.textContent = int.format(count);
+      chip.appendChild(n);
+      chip.addEventListener("click", () => onToggle(key));
+      container.appendChild(chip);
+    }
+  };
+
+  const healthCounts = new Map();
+  for (const r of rows) healthCounts.set(r.health, (healthCounts.get(r.health) ?? 0) + 1);
+  build(
+    document.getElementById("blog-health-chips"),
+    HEALTH_BANDS.filter((b) => healthCounts.get(b.status)).map((b) => ({
+      key: b.status,
+      label: b.label,
+      count: healthCounts.get(b.status),
+    })),
+    blogState.health,
+    (key) => {
+      blogState.health.has(key) ? blogState.health.delete(key) : blogState.health.add(key);
+      renderBlog();
+    },
+  );
+
+  // Hidden until the audit has reached at least one post — a lone
+  // "unassigned 108" chip is a control that does nothing.
+  const verdictCounts = new Map();
+  for (const r of rows) {
+    const key = r.audit?.verdict || "unassigned";
+    verdictCounts.set(key, (verdictCounts.get(key) ?? 0) + 1);
+  }
+  const group = document.getElementById("blog-verdict-group");
+  const hasVerdicts = [...verdictCounts.keys()].some((k) => k !== "unassigned");
+  group.hidden = !hasVerdicts;
+  if (hasVerdicts) {
+    build(
+      document.getElementById("blog-verdict-chips"),
+      ["KEEP", "IMPROVE", "MERGE", "REMOVE", "unassigned"]
+        .filter((k) => verdictCounts.get(k))
+        .map((k) => ({ key: k, label: k === "unassigned" ? "Not audited" : k, count: verdictCounts.get(k) })),
+      blogState.verdict,
+      (key) => {
+        blogState.verdict.has(key) ? blogState.verdict.delete(key) : blogState.verdict.add(key);
+        renderBlog();
+      },
+    );
+  }
 }
 
 function renderBlogTable(container, rows) {
@@ -1750,10 +1951,25 @@ function renderBlogTable(container, rows) {
   const table = document.createElement("table");
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
-  for (const label of ["Post", "Priority", "Published", "Last updated", "Age", "Clicks", "Δ Clicks", "Impr.", "Pos."]) {
+  const showVerdict = rows.some((r) => r.audit?.verdict);
+  const COLUMNS = [
+    ["Post", "The post, its slug, and what the audit and the format check found"],
+    ["Health", "From the last 90 days against the previous 90 and the same 90 last year"],
+    ...(showVerdict ? [["Verdict", "From the audit records. The tracker reads these; it never assigns them."]] : []),
+    ["Refresh", "Priority orders the queue. “Due” is the spec's rule: stale past the window and worth the effort."],
+    ["Published", ""],
+    ["Last updated", "Prefers the hand-recorded substantive date; otherwise the WordPress save date"],
+    ["Age", "Since the date in the previous column"],
+    ["Clicks", "Last 6 months"],
+    ["Δ Clicks", "vs the previous 6 months"],
+    ["Impr.", "Last 6 months"],
+    ["Pos.", "Average position, last 6 months"],
+  ];
+  for (const [label, hint] of COLUMNS) {
     const th = document.createElement("th");
     th.textContent = label;
     th.scope = "col";
+    if (hint) th.title = hint;
     headRow.appendChild(th);
   }
   thead.appendChild(headRow);
@@ -1773,26 +1989,112 @@ function renderBlogTable(container, rows) {
     sub.className = "cell-sub";
     sub.textContent = r.url.replace(/^https?:\/\/[^/]+/, "");
     title.append(link, sub);
-    if (r.source === "new") {
-      const badge = document.createElement("span");
-      badge.className = "badge badge--new";
-      badge.textContent = "New — not in curated list";
+
+    // Everything that is a property of the post rather than a measurement
+    // goes here as a small marker. It keeps the audit's dozen-odd fields
+    // visible without a dozen columns nobody can read at once; the CSV has
+    // them all in full.
+    const flags = [];
+    if (r.source === "new") flags.push({ text: "New — not in curated list", kind: "ok" });
+    if (r.audit?.cluster) flags.push({ text: r.audit.cluster, kind: "" });
+    if (r.audit?.mainCategory) flags.push({ text: r.audit.mainCategory, kind: "" });
+    if (r.audit?.status) flags.push({ text: r.audit.status, kind: "" });
+    if (r.audit?.voiceMatch === false) {
+      flags.push({
+        text: `voice: ${r.audit.currentVoice} → ${r.audit.topicIntentVoice}`,
+        kind: "warn",
+      });
+    }
+    if (r.audit?.voiceIssues > 0) flags.push({ text: `${r.audit.voiceIssues} voice issue(s)`, kind: "warn" });
+    if (r.audit?.imageStyle === "legacy") flags.push({ text: "legacy image", kind: "warn" });
+    if (r.conformance) {
+      flags.push(
+        r.conformance.formatConforms
+          ? { text: "format ✓", kind: "ok" }
+          : {
+              text: `format ✗${r.conformance.missingHeadings.length ? ` — no ${r.conformance.missingHeadings.join(", ")}` : ""}`,
+              kind: "warn",
+            },
+      );
+      if (!r.conformance.hasFaqs) flags.push({ text: "no FAQs", kind: "warn" });
+      if (!r.conformance.moneyLinksOut) flags.push({ text: "no money links", kind: "warn" });
+      if (!r.conformance.internalLinksIn) flags.push({ text: "orphan", kind: "warn" });
+    }
+    // Vetoes last so they read as the final word, which is what they are:
+    // neither is a judgement, both block a REMOVE until someone looks.
+    for (const veto of r.vetoes ?? []) flags.push({ text: veto.label, kind: "veto" });
+    for (const flag of r.audit?.reviewFlags ?? []) flags.push({ text: flag, kind: "warn" });
+
+    if (flags.length) {
       const wrap = document.createElement("span");
-      wrap.className = "cell-sub";
-      wrap.appendChild(badge);
+      wrap.className = "flags";
+      for (const f of flags) {
+        const el = document.createElement("span");
+        el.className = `flag${f.kind ? ` flag--${f.kind}` : ""}`;
+        el.textContent = f.text;
+        wrap.appendChild(el);
+      }
       title.appendChild(wrap);
     }
     tr.appendChild(title);
 
+    const healthCell = document.createElement("td");
+    healthCell.style.textAlign = "left";
+    const healthBadge = document.createElement("span");
+    healthBadge.className = `badge badge--h-${r.health}`;
+    healthBadge.textContent = r.healthLabel;
+    const healthWhy = document.createElement("span");
+    healthWhy.className = "reasons";
+    healthWhy.textContent = r.healthReasons.join(" · ");
+    healthCell.append(healthBadge, healthWhy);
+    tr.appendChild(healthCell);
+
+    if (showVerdict) {
+      const verdictCell = document.createElement("td");
+      verdictCell.style.textAlign = "left";
+      if (r.audit?.verdict) {
+        const v = document.createElement("span");
+        v.className = `badge badge--v-${r.audit.verdict}`;
+        v.textContent = r.audit.verdict;
+        if (r.audit.confidence) v.title = `Confidence: ${r.audit.confidence}`;
+        verdictCell.appendChild(v);
+        if (r.audit.primaryReason || r.audit.actionDetail) {
+          const why = document.createElement("span");
+          why.className = "reasons";
+          why.textContent = r.audit.primaryReason || r.audit.actionDetail;
+          verdictCell.appendChild(why);
+        }
+      } else {
+        const none = document.createElement("span");
+        none.className = "badge badge--none";
+        none.textContent = "Not audited";
+        verdictCell.appendChild(none);
+      }
+      tr.appendChild(verdictCell);
+    }
+
     const priority = document.createElement("td");
     priority.style.textAlign = "left";
     const badge = document.createElement("span");
-    badge.className = `badge badge--${r.priority.tier}`;
-    badge.textContent = { high: "High", medium: "Medium", low: "Low" }[r.priority.tier];
+    badge.className = `badge badge--${r.priority.tier === "none" ? "none" : r.priority.tier}`;
+    badge.textContent =
+      { high: "High", medium: "Medium", low: "Low", none: "—" }[r.priority.tier] ?? r.priority.tier;
+    badge.title = "Refresh priority: this orders the queue, it is not a verdict.";
+    priority.appendChild(badge);
+    if (r.refreshDue) {
+      const dueBadge = document.createElement("span");
+      // Its own class, not the generic warning one: "due a refresh" is a
+      // scheduling fact, and it sits next to conformance warnings that mean
+      // something else entirely.
+      dueBadge.className = "flag flag--due";
+      dueBadge.textContent = "Due";
+      dueBadge.title = r.refreshReason;
+      priority.appendChild(dueBadge);
+    }
     const reasons = document.createElement("span");
     reasons.className = "reasons";
     reasons.textContent = r.priority.reasons.join(" · ");
-    priority.append(badge, reasons);
+    priority.appendChild(reasons);
     tr.appendChild(priority);
 
     const cell = (text) => {
@@ -1800,16 +2102,6 @@ function renderBlogTable(container, rows) {
       td.textContent = text;
       tr.appendChild(td);
       return td;
-    };
-    // A date is only as good as where it came from, and these come from four
-    // different places. The cell shows the date; the tooltip shows the source,
-    // so "—" and "hand-entered" are distinguishable without another column.
-    const SOURCE_LABEL = {
-      manual: "entered by hand in data/blog-dates.csv",
-      wp: "the WordPress API",
-      sitemap: "the sitemap",
-      html: "the post's page",
-      stored: "an earlier run",
     };
     const dated = (value, source, kind) => {
       const td = cell(value ? prettyDate(value) : "—");
@@ -1820,7 +2112,29 @@ function renderBlogTable(container, rows) {
       return td;
     };
     dated(r.published, r.publishedSource, "Published");
-    dated(r.lastmod, r.modifiedSource, "Last updated");
+
+    // Two different dates can land in this column and they do not mean the
+    // same thing. WordPress `modified` moves on any save — a typo fix reads
+    // as a refresh — so the spec keeps a hand-recorded substantive date, and
+    // where there is one it wins and the cell says so.
+    const shownDate = r.lastSubstantiveUpdate ?? r.lastmod;
+    const updated = cell(shownDate ? prettyDate(shownDate) : "—");
+    if (!shownDate) {
+      updated.classList.add("cell-unknown");
+      updated.title = "No update date on record";
+    } else {
+      const basis = document.createElement("span");
+      basis.className = "cell-basis";
+      basis.textContent = r.ageBasis === "substantive" ? "substantive" : "last save";
+      updated.appendChild(basis);
+      updated.title =
+        r.ageBasis === "substantive"
+          ? "Hand-recorded in audit/audit-records.csv as the last real content revision"
+          : `WordPress save date from ${SOURCE_LABEL[r.modifiedSource] ?? "an unknown source"} — it moves on any edit, so it is not proof of a refresh`;
+      if (r.lastSubstantiveUpdate && r.lastmod && r.lastmod !== r.lastSubstantiveUpdate) {
+        updated.title += `. Last saved ${prettyDate(r.lastmod)}.`;
+      }
+    }
     cell(monthsAgo(r.daysSinceUpdate));
     cell(int.format(r.clicks));
 
@@ -1851,6 +2165,49 @@ document.getElementById("blog-search").addEventListener("input", (event) => {
   blogState.search = event.target.value;
   renderBlog();
 });
+
+/**
+ * CSV downloads, fetched rather than navigated to.
+ *
+ * A plain `<a download>` cannot carry the report password, so once
+ * REPORT_PASSWORD is set the browser follows the link, gets a 401 and saves
+ * the error body as a .csv file. Fetching with the header and handing the
+ * browser a blob keeps the link looking and behaving like a link while
+ * actually being authorised.
+ */
+for (const link of document.querySelectorAll("a[download][href^='/api/']")) {
+  link.addEventListener("click", async (event) => {
+    event.preventDefault();
+    const original = link.textContent;
+    link.textContent = "Preparing…";
+    link.setAttribute("aria-busy", "true");
+    try {
+      const headers = {};
+      if (state.password) headers["x-report-password"] = state.password;
+      const res = await fetch(link.href, { headers });
+      if (!res.ok) throw new Error(`request failed (${res.status})`);
+      const blob = await res.blob();
+      // The server names the file; fall back to the endpoint if it did not.
+      const disposition = res.headers.get("content-disposition") ?? "";
+      const named = /filename="?([^";]+)"?/.exec(disposition)?.[1];
+      const url = URL.createObjectURL(blob);
+      const temp = document.createElement("a");
+      temp.href = url;
+      temp.download = named || `${link.id || "export"}.csv`;
+      document.body.appendChild(temp);
+      temp.click();
+      temp.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      link.textContent = `Download failed — ${err.message}`;
+      setTimeout(() => (link.textContent = original), 4000);
+      return;
+    } finally {
+      link.removeAttribute("aria-busy");
+    }
+    link.textContent = original;
+  });
+}
 
 /* Differential tab --------------------------------------------------------
  *
@@ -1944,6 +2301,17 @@ function renderDifferential() {
   }
 
   const mode = diffState.mode;
+  // A payload without windows or totals should not take the tab down with a
+  // TypeError. It happens when the collection half-failed and a partial
+  // snapshot was served, and the honest response is to say so.
+  if (!data.windows || !data.totals) {
+    status.hidden = false;
+    status.textContent =
+      "The differential could not be built — Search Console returned no comparison windows. Try again, or check /api/health.";
+    document.getElementById("diff-table").replaceChildren();
+    return;
+  }
+
   const totals = mode === "month" ? data.totals.month : data.totals.period;
   const win = mode === "month"
     ? { recent: data.windows.thisMonth, prior: data.windows.lastMonth }
